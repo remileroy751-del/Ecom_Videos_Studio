@@ -11,12 +11,13 @@ function fmt(s, dec) { s = Math.max(0, s || 0); const m = Math.floor(s / 60), r 
 
 let state = freshState();
 function freshState() { return { media: [], clips: [], audioTracks: 1, captions: [], selected: null, resolution: "1080", ratio: "16:9", pps: 40 }; }
-const isStill = c => c.type === "image" || c.type === "sticker";
+const isStill = c => c.type === "image" || c.type === "sticker" || c.type === "text";
+const isOv = c => c.type === "sticker" || c.type === "text";
 let stickerDir = "", fxDir = "", fxCat = "all";
 const joinDir = (d, f) => { d = d.replace(/[\\/]+$/, ""); return d + (d.indexOf("\\") >= 0 ? "\\" : "/") + f; };
 const fxPath = id => joinDir(fxDir, "fx_" + id + ".mp4");
 const P = { t: 0, playing: false, last: 0 };
-let currentPanel = "media", resolution = "1080", capSettings = { provider: "groq", hasKey: false }, capBusy = false;
+let mediaFilter = "all", currentPanel = "media", resolution = "1080", capSettings = { provider: "groq", has: {} }, capBusy = false;
 
 const setStatus = m => { $("status").textContent = m; };
 const total = () => state.clips.reduce((m, c) => Math.max(m, c.start + c.duration), 0);
@@ -32,8 +33,11 @@ for (let i = 0; i < 3; i++) {
   const vig = document.createElement("div"); vig.className = "vig";
   const bars = document.createElement("div"); bars.className = "bars";
   const fxv = [0, 1].map(() => { const f = document.createElement("video"); f.className = "fxv"; f.muted = true; f.loop = true; f.playsInline = true; f.style.display = "none"; return f; });
-  wrap.append(v, img, vig, bars, ...fxv); $("layers").appendChild(wrap);
-  layers.push({ wrap, v, img, vig, bars, fxv, cur: null });
+  const main = document.createElement("div"); main.className = "mn"; main.append(v, img, vig, bars, ...fxv);
+  const gv = document.createElement("video"); gv.playsInline = true; gv.preload = "auto"; gv.muted = true; gv.addEventListener("loadeddata", () => syncMedia(true));
+  const gi = document.createElement("img"), gh = document.createElement("div"); gh.className = "gh"; gh.append(gv, gi);
+  wrap.append(gh, main); $("layers").appendChild(wrap);
+  layers.push({ wrap, main, gh, gv, gi, v, img, vig, bars, fxv, cur: null, gcur: null });
   const a = new Audio(); a.preload = "auto"; a.addEventListener("loadeddata", () => syncMedia(true)); aEls.push({ a, cur: null });
 }
 
@@ -44,11 +48,11 @@ function drive(el, c, t, sw) {
   if (sw || diff > 0.35 || (!P.playing && diff > 0.04)) { try { el.currentTime = target; } catch (e) {} }
   if (P.playing) { if (el.paused) el.play().catch(() => {}); } else if (!el.paused) el.pause();
 }
-function setSrc(el, p) { if (el.dataset.src !== p) { el.dataset.src = p; el.src = fileUrl(p); } }
+function setSrc(el, p, key) { const k = key || p; if (el.dataset.src !== k) { el.dataset.src = k; el.src = key ? p : fileUrl(p); } }
 
 function applyFx(L, c, t, force) {
   const tl = clamp(t - c.start, 0, c.duration);
-  const f = c.type === "sticker" ? null : EcomFX.preview(c.fx, tl, c.duration);
+  const f = isOv(c) ? null : EcomFX.preview(c.fx, tl, c.duration);
   const css = f ? f.css : "", tf = f ? f.tf : "";
   L.v.style.filter = css; L.img.style.filter = css; L.v.style.transform = tf; L.img.style.transform = tf;
   L.wrap.style.opacity = f ? f.opacity : 1;
@@ -61,21 +65,46 @@ function applyFx(L, c, t, force) {
     else { if (!fv.paused) fv.pause(); if (force) { try { fv.currentTime = tl % 3; } catch (e) {} } }
   });
 }
+const prevAdj = c => state.clips.find(a => a !== c && a.kind === c.kind && a.track === c.track && (a.type === "video" || a.type === "image") && Math.abs(a.start + a.duration - c.start) < 0.12);
+const nextAdj = c => state.clips.find(a => a !== c && a.kind === c.kind && a.track === c.track && (a.type === "video" || a.type === "image") && Math.abs(c.start + c.duration - a.start) < 0.12);
+function resetTrans(L) {
+  const m = L.main.style; m.transform = ""; m.clipPath = ""; m.opacity = ""; m.visibility = ""; m.zIndex = ""; m.transformOrigin = "";
+  L.gh.style.display = "none"; if (!L.gv.paused) L.gv.pause();
+}
+function applyTrans(L, c, t, force) {
+  const T = c.trans && EcomTR.BY[c.trans.id], A = T && (c.type === "video" || c.type === "image") ? prevAdj(c) : null;
+  const d = T ? Math.max(0.2, Math.min(+c.trans.dur || 0.8, c.duration * 0.9)) : 0, tl = t - c.start;
+  if (!A || tl < 0 || tl >= d) { resetTrans(L); return; }
+  const F = $("frame"), Fw = F.clientWidth, Fh = F.clientHeight, p = tl / d;
+  const sb = EcomTR.layerState(T, "b", p, Fw, Fh), sg = EcomTR.layerState(T, "g", p, Fw, Fh);
+  const m = L.main.style; m.transformOrigin = T.td ? "0 0" : "50% 50%"; m.transform = sb.transform; m.opacity = sb.opacity; m.clipPath = sb.clip; m.visibility = sb.visible ? "visible" : "hidden"; m.zIndex = sb.z;
+  const g = L.gh.style; g.display = "block"; g.transformOrigin = T.td ? "0 0" : "50% 50%"; g.transform = sg.transform; g.opacity = sg.opacity; g.visibility = sg.visible ? "visible" : "hidden"; g.zIndex = sg.z;
+  const css = EcomFX.preview(A.fx, A.duration, A.duration).css, fit = A.fit === "fill" ? "cover" : "contain";
+  if (A.type === "image") {
+    L.gv.style.display = "none"; L.gi.style.display = "block"; setSrc(L.gi, A.path); L.gi.style.filter = css; L.gi.style.objectFit = fit;
+  } else {
+    L.gi.style.display = "none"; L.gv.style.display = "block"; L.gv.style.filter = css; L.gv.style.objectFit = fit;
+    const first = L.gcur !== A.id; setSrc(L.gv, A.path);
+    if (first || force) { L.gcur = A.id; try { L.gv.currentTime = Math.max(0, A.inPoint + A.duration - 0.05); } catch (e) {} }
+    if (!L.gv.paused) L.gv.pause();
+  }
+}
 function syncMedia(force) {
   const t = P.t;
   for (let i = 0; i < 3; i++) {
     const L = layers[i], c = clipAt("video", i, t);
     if (!c) { L.wrap.style.display = "none"; if (!L.v.paused) L.v.pause(); L.fxv.forEach(fv => { if (!fv.paused) fv.pause(); }); L.cur = null; continue; }
     L.wrap.style.display = "block";
-    if (c.type === "sticker") {
-      const a = EcomAnim.at(c.anim || "none", clamp(t - c.start, 0, c.duration), c.duration);
+    if (isOv(c)) {
+      const a = EcomAnim.at(c.anim || "none", clamp(t - c.start, 0, c.duration), c.duration, c.env === false);
       L.wrap.style.transform = `translate(${c.x + a.dx * 100}%,${c.y + a.dy * 100}%) rotate(${a.rot}rad) scale(${(c.scale / 100) * a.s})`;
     } else L.wrap.style.transform = `translate(${c.x}%,${c.y}%) scale(${c.scale / 100})`;
     const fitMode = c.fit === "fill" ? "cover" : "contain"; L.v.style.objectFit = fitMode; L.img.style.objectFit = fitMode;
     applyFx(L, c, t, force);
+    if (isOv(c)) resetTrans(L); else applyTrans(L, c, t, force);
     if (isStill(c)) {
       L.v.style.display = "none"; if (!L.v.paused) L.v.pause();
-      L.img.style.display = "block"; setSrc(L.img, c.path); L.cur = c.id;
+      L.img.style.display = "block"; if (c.type === "text") setSrc(L.img, c.img, c.id + ":" + c.imgVer); else setSrc(L.img, c.path); L.cur = c.id;
     } else {
       L.img.style.display = "none"; L.v.style.display = "block";
       const sw = force || L.cur !== c.id; L.cur = c.id;
@@ -96,11 +125,12 @@ function play() {
   P.playing = true; P.last = performance.now(); $("play").textContent = "⏸";
   syncMedia(true); requestAnimationFrame(tick);
 }
-function pause() { P.playing = false; $("play").textContent = "▶"; syncMedia(); }
+function pause() { P.stopAt = null; P.playing = false; $("play").textContent = "▶"; syncMedia(); }
 function tick(now) {
   if (!P.playing) return;
   P.t += (now - P.last) / 1000; P.last = now;
   if (P.t >= total()) { P.t = total(); pause(); updateUI(); return; }
+  if (P.stopAt && P.t >= P.stopAt) { pause(); updateUI(); return; }
   syncMedia(); updateUI(true); requestAnimationFrame(tick);
 }
 function seek(t) { P.t = clamp(t, 0, Math.max(total(), 0)); syncMedia(true); updateUI(); }
@@ -109,7 +139,7 @@ function seek(t) { P.t = clamp(t, 0, Math.max(total(), 0)); syncMedia(true); upd
 function clipRect(c) {
   const F = $("frame"), Fw = F.clientWidth, Fh = F.clientHeight, S = c.scale / 100, frameAr = Fw / Fh;
   let w, h;
-  if (c.fit === "fill" && c.type !== "sticker") { w = Fw * S; h = Fh * S; }
+  if (c.fit === "fill" && !isOv(c)) { w = Fw * S; h = Fh * S; }
   else {
     const ar = c.type === "sticker" ? 1 : (c.srcW && c.srcH ? c.srcW / c.srcH : frameAr);
     if (ar >= frameAr) { w = Fw * S; h = w / ar; } else { h = Fh * S; w = h * ar; }
@@ -201,7 +231,7 @@ function mediaHtml(filter) {
     return `<div class="media-item" draggable="true" data-id="${m.id}"><div class="thumb">${th}</div><div class="minfo"><b>${esc(m.name)}</b><small>${icon} ${m.type === "image" ? "Photo" : fmt(m.duration)}${m.type === "video" && !m.hasAudio ? " • sans son" : ""}</small></div><button class="addbtn" data-add="${m.id}" title="Ajouter à la timeline">＋</button></div>`;
   }).join("");
 }
-function renderMedia() { const el = $("mediaList"); if (el) el.innerHTML = mediaHtml(currentPanel === "audio" ? "audio" : null); }
+function renderMedia() { const el = $("mediaList"); if (el) el.innerHTML = mediaHtml(mediaFilter === "all" ? null : mediaFilter); }
 
 /* ---------- Clips ---------- */
 function overlaps(clip, track, start, dur) {
@@ -251,6 +281,15 @@ function addSticker(s, track, time) {
   if (c && !P.playing) seek(c.start + Math.min(0.6, c.duration / 2));
   return c;
 }
+/* ---------- Textes ---------- */
+const TEXT_DEFAULT = () => (EcomI18n.lang() === "en" ? "Your text" : "Votre texte");
+function addText(preset, track, time) {
+  if (time == null) time = P.t;
+  if (track == null) { track = [2, 1, 0].find(tr => !overlaps({ kind: "video" }, tr, time, 3)); if (track == null) track = 2; }
+  const text = TEXT_DEFAULT(), ts = JSON.parse(JSON.stringify(preset.ts)), r = EcomText.render(text, ts);
+  const m = { id: "txt_" + preset.id, path: "", name: text, type: "text", duration: 3, hasAudio: false };
+  return addClip(m, "video", track, time, { type: "text", text, ts, img: r.url, srcW: r.w, srcH: r.h, imgVer: 1, anim: "none", env: false, scale: 60, y: 22, mediaDur: 0, path: "" });
+}
 function quickAdd(m) {
   if (m.type === "audio") { const a = state.clips.filter(c => c.kind === "audio" && c.track === 0); return addClip(m, "audio", 0, a.reduce((x, c) => Math.max(x, c.start + c.duration), 0)); }
   const v = state.clips.filter(c => c.kind === "video" && c.track === 0);
@@ -268,7 +307,7 @@ function splitAt(t) {
   if (!targets.length) return setStatus("Placez la tête de lecture à l'intérieur d'un clip pour le couper.");
   targets.forEach(c => {
     const d = t - c.start;
-    state.clips.push({ ...c, id: newId(), start: t, inPoint: isStill(c) ? 0 : c.inPoint + d, duration: c.duration - d });
+    state.clips.push({ ...c, id: newId(), start: t, inPoint: isStill(c) ? 0 : c.inPoint + d, duration: c.duration - d, trans: null, fx: (c.fx || []).slice(), ts: c.ts ? JSON.parse(JSON.stringify(c.ts)) : c.ts });
     c.duration = d;
   });
   renderTimeline(); syncMedia(true); setStatus("Clip coupé");
@@ -281,9 +320,9 @@ function renderTimeline() {
   let ticks = "";
   for (let s = 0; s <= T; s += step) ticks += `<span class="tick" style="left:${s * pps}px">${fmt(s)}</span>`;
   const clipHtml = (kind, track) => state.clips.filter(c => c.kind === kind && c.track === track).map(c => {
-    const icon = c.type === "sticker" ? "☺" : c.type === "image" ? "🖼" : c.kind === "audio" ? "♫" : "🎬";
-    const bg = c.type === "sticker" ? `;background-image:url('${fileUrl(c.path)}');background-size:auto 78%;background-repeat:no-repeat;background-position:28px center` : c.type === "image" ? `;background-image:linear-gradient(rgba(8,12,24,.45),rgba(8,12,24,.45)),url('${fileUrl(c.path)}');background-size:auto 100%;background-repeat:repeat-x` : c.thumb ? `;background-image:linear-gradient(rgba(8,12,24,.5),rgba(8,12,24,.5)),url('${c.thumb}');background-size:auto 100%;background-repeat:repeat-x` : "";
-    return `<div class="clip ${c.kind} ${c.type}${c.id === state.selected ? " selected" : ""}" data-id="${c.id}" style="left:${c.start * pps}px;width:${Math.max(8, c.duration * pps)}px${bg}"><i class="h hl"></i><span class="cname">${icon} ${esc(c.name)}</span><i class="h hr"></i></div>`;
+    const icon = c.type === "text" ? "T" : c.type === "sticker" ? "☺" : c.type === "image" ? "🖼" : c.kind === "audio" ? "♫" : "🎬";
+    const bg = c.type === "text" ? "" : c.type === "sticker" ? `;background-image:url('${fileUrl(c.path)}');background-size:auto 78%;background-repeat:no-repeat;background-position:28px center` : c.type === "image" ? `;background-image:linear-gradient(rgba(8,12,24,.45),rgba(8,12,24,.45)),url('${fileUrl(c.path)}');background-size:auto 100%;background-repeat:repeat-x` : c.thumb ? `;background-image:linear-gradient(rgba(8,12,24,.5),rgba(8,12,24,.5)),url('${c.thumb}');background-size:auto 100%;background-repeat:repeat-x` : "";
+    return `<div class="clip ${c.kind} ${c.type}${c.id === state.selected ? " selected" : ""}" data-id="${c.id}" style="left:${c.start * pps}px;width:${Math.max(8, c.duration * pps)}px${bg}"><i class="h hl"></i>${c.trans && prevAdj(c) ? '<i class="tbadge">⇋</i>' : ""}<span class="cname">${icon} ${esc(c.name)}</span><i class="h hr"></i></div>`;
   }).join("");
   let h = `<div class="tl-inner" style="width:${LABEL + width}px"><div class="ruler-row"><div class="tlabel corner"></div><div class="ruler" id="ruler" style="width:${width}px">${ticks}</div></div>`;
   for (let v = 2; v >= 0; v--) h += `<div class="track-row video"><div class="tlabel">V${v + 1}</div><div class="lane" data-kind="video" data-track="${v}" style="width:${width}px">${clipHtml("video", v)}</div></div>`;
@@ -350,6 +389,8 @@ function initTimeline() {
     const lane = e.target.closest(".lane"); if (!lane) return;
     e.preventDefault(); lane.classList.remove("over");
     const t = Math.max(0, (e.clientX - lane.getBoundingClientRect().left) / state.pps);
+    const xid = e.dataTransfer.getData("application/x-ecom-text");
+    if (xid) { const pr = EcomText.BY[xid]; if (pr && lane.dataset.kind === "video") addText(pr, +lane.dataset.track, t); else setStatus("Un texte se dépose sur une piste vidéo (V1 à V3)."); return; }
     const sid = e.dataTransfer.getData("application/x-ecom-sticker");
     if (sid) { const st = STICKERS.find(x => x.id === sid); if (st && lane.dataset.kind === "video") addSticker(st, +lane.dataset.track, t); else setStatus("Un sticker se dépose sur une piste vidéo (V1 à V3)."); return; }
     const id = e.dataTransfer.getData("application/x-ecom-media");
@@ -363,7 +404,7 @@ function initTimeline() {
 
 /* ---------- Panneau de réglages (à droite) ---------- */
 const RATIOS = { "9:16": 9 / 16, "16:9": 16 / 9, "4:5": 4 / 5, "1:1": 1 };
-const SIZES = { "1080": { "16:9": [1920, 1080], "9:16": [1080, 1920], "4:5": [1080, 1350], "1:1": [1080, 1080] }, "480": { "16:9": [854, 480], "9:16": [480, 854], "4:5": [480, 600], "1:1": [480, 480] } };
+const SIZES = { "1080": { "16:9": [1920, 1080], "9:16": [1080, 1920], "4:5": [1080, 1350], "1:1": [1080, 1080] }, "720": { "16:9": [1280, 720], "9:16": [720, 1280], "4:5": [720, 900], "1:1": [720, 720] }, "480": { "16:9": [854, 480], "9:16": [480, 854], "4:5": [480, 600], "1:1": [480, 480] } };
 function applyRatio() {
   $("frame").style.setProperty("--ar", RATIOS[state.ratio] || 16 / 9);
   document.querySelectorAll("#ratioGroup button").forEach(b => b.classList.toggle("on", b.dataset.ratio === state.ratio));
@@ -374,66 +415,176 @@ function renderProps() {
   if (!c) {
     const sz = SIZES["1080"][state.ratio];
     box.innerHTML = `<div class="insp-title">Projet</div><div class="insp-info">Format : <b>${state.ratio}</b><br>Qualité max : <b>${sz[0]}×${sz[1]}</b><br>Durée : <b>${fmt(total())}</b><br>Clips : <b>${state.clips.length}</b></div><div class="insp-hint">Cliquez sur un clip de la timeline pour afficher ses réglages ici : volume, taille, position, animation…<br><br>Le format se change sous l'aperçu (9:16, 16:9, 4:5, 1:1).</div>`;
+    refreshFxActive(); refreshTrActive();
     return;
   }
   const row = (key, label, min, max, val, unit, step) => `<div class="row"><label>${label}<span>${val}${unit}</span></label><input type="range" data-p="${key}" data-u="${unit}" min="${min}" max="${max}" step="${step || 1}" value="${val}"></div>`;
-  const kindTxt = c.type === "sticker" ? "Sticker" : c.type === "image" ? "Photo" : c.kind === "audio" ? "Audio" : "Vidéo";
+  const kindTxt = c.type === "text" ? "Texte" : c.type === "sticker" ? "Sticker" : c.type === "image" ? "Photo" : c.kind === "audio" ? "Audio" : "Vidéo";
   let h = `<div class="insp-title">Détails <small>${kindTxt}</small></div><div class="insp-name">${esc(c.name)}</div>`;
   if (!isStill(c) && (c.kind === "audio" || c.hasAudio)) h += `<div class="insp-sec"><h4>Audio</h4>${row("volume", "Volume", 0, 100, c.volume, "%")}</div>`;
+  if (c.type === "text") {
+    const ts = c.ts;
+    const trow = (key, label, min, max, unit) => `<div class="row"><label>${label}<span>${ts[key]}${unit}</span></label><input type="range" data-ts="${key}" data-u="${unit}" min="${min}" max="${max}" value="${ts[key]}"></div>`;
+    const crow = (key, label) => `<div class="row two"><label style="margin:0;flex:1;display:block">${label}</label><input type="color" data-ts="${key}" value="${ts[key]}"></div>`;
+    const chk = (key, label) => `<label class="chk2"><input type="checkbox" data-tsc="${key}"${ts[key] ? " checked" : ""}> ${label}</label>`;
+    const fontOpts = EcomText.FONTS.map(f => `<option value="${f[0]}"${ts.font === f[0] ? " selected" : ""}>${f[0]}</option>`).join("");
+    const fxOpts = [["none", "Aucun"], ["shadow", "Ombre douce"], ["hard", "Ombre portée"], ["glow", "Lueur"]].map(o => `<option value="${o[0]}"${ts.fx === o[0] ? " selected" : ""}>${o[1]}</option>`).join("");
+    h += `<div class="insp-sec"><h4>Texte</h4><div class="row"><textarea data-text="1">${esc(c.text)}</textarea></div>
+      <div class="row"><label>Police</label><select data-ts="font">${fontOpts}</select></div>
+      <div class="row seg"><button data-tsb="bold" class="${ts.bold ? "on" : ""}" title="Gras"><b>G</b></button><button data-tsb="italic" class="${ts.italic ? "on" : ""}" title="Italique"><i>I</i></button><button data-tsb="upper" class="${ts.upper ? "on" : ""}" title="Majuscules">AA</button></div>
+      <div class="row seg"><button data-align="left" class="${ts.align === "left" ? "on" : ""}">◀</button><button data-align="center" class="${ts.align === "center" ? "on" : ""}">▬</button><button data-align="right" class="${ts.align === "right" ? "on" : ""}">▶</button></div>
+      ${trow("spacing", "Espacement des lettres", -5, 40, "")}</div>
+      <div class="insp-sec"><h4>Couleurs</h4>${crow("color", "Couleur")}${chk("grad", "Dégradé")}${ts.grad ? crow("color2", "Couleur 2") : ""}${trow("opacity", "Opacité du texte", 0, 100, "%")}</div>
+      <div class="insp-sec"><h4>Contour</h4>${trow("strokeW", "Épaisseur", 0, 20, "")}${crow("strokeColor", "Couleur du contour")}</div>
+      <div class="insp-sec"><h4>Ombre / lueur</h4><div class="row"><select data-ts="fx">${fxOpts}</select></div>${ts.fx !== "none" ? crow("fxColor", "Couleur") + trow("fxAmount", "Intensité", 0, 100, "") : ""}</div>
+      <div class="insp-sec"><h4>Fond</h4>${chk("bg", "Afficher un fond")}${ts.bg ? crow("bgColor", "Couleur du fond") + trow("bgOpacity", "Opacité du fond", 0, 100, "%") + trow("bgRadius", "Arrondi", 0, 50, "") : ""}</div>`;
+  }
   if (c.kind === "video") {
     h += `<div class="insp-sec"><h4>Image</h4>${row("scale", "Taille", 5, 300, c.scale, "%")}${row("x", "Position X", -100, 100, c.x, "")}${row("y", "Position Y", -100, 100, c.y, "")}`;
-    if (c.type !== "sticker") h += `<div class="row seg"><button data-fit="fit" class="${c.fit === "fill" ? "" : "on"}">Ajuster</button><button data-fit="fill" class="${c.fit === "fill" ? "on" : ""}">Remplir</button></div>`;
+    if (!isOv(c)) h += `<div class="row seg"><button data-fit="fit" class="${c.fit === "fill" ? "" : "on"}">Ajuster</button><button data-fit="fill" class="${c.fit === "fill" ? "on" : ""}">Remplir</button></div>`;
     h += `<div class="row"><button id="resetProps" style="width:100%">Recentrer</button></div></div>`;
   }
-  if (c.kind === "video" && c.type !== "sticker") {
+  if (c.kind === "video" && !isOv(c)) {
     const chips = (c.fx || []).map(id => EcomFX.BY[id] ? `<span class="chip">${esc(EcomFX.BY[id].name)}<button data-fxrm="${id}" title="Retirer">×</button></span>` : "").join("");
     h += `<div class="insp-sec"><h4>Effets</h4>${chips ? `<div class="chips">${chips}</div><div class="row"><button id="fxClear" style="width:100%">Retirer tous les effets</button></div>` : `<div class="insp-hint">Aucun effet. Ouvrez l'onglet Effets et cliquez sur un effet pour l'appliquer à tout ce clip.</div>`}</div>`;
+    const A = prevAdj(c), T = c.trans && EcomTR.BY[c.trans.id];
+    h += `<div class="insp-sec"><h4>Transition d'entrée</h4>`;
+    if (A && T) h += `<div class="chips"><span class="chip">${esc(T.name)}<button data-trrm="1" title="Retirer">×</button></span></div>${row("transdur", "Durée", 0.2, 2, +(+c.trans.dur).toFixed(1), " s", 0.1)}`;
+    else if (A) h += `<div class="insp-hint">Aucune transition. Ouvrez l'onglet Transitions et cliquez sur une transition.</div>`;
+    else h += `<div class="insp-hint">Placez ce clip juste après un autre clip de la même piste pour ajouter une transition.</div>`;
+    h += `</div>`;
   }
-  if (c.type === "sticker") {
-    h += `<div class="insp-sec"><h4>Animation</h4><div class="row"><label>Mouvement</label><select data-p="anim">${Object.keys(EcomAnim.LOOPS).map(k => `<option value="${k}"${(c.anim || "none") === k ? " selected" : ""}>${EcomAnim.LOOPS[k].label}</option>`).join("")}</select></div>${row("duration", "Durée", 1, 10, +c.duration.toFixed(1), " s", 0.5)}<div class="insp-hint">Apparition « pop » + mouvement en boucle + disparition.</div></div>`;
+  if (isOv(c)) {
+    h += `<div class="insp-sec"><h4>Animation</h4><div class="row"><label>Mouvement</label><select data-p="anim">${Object.keys(EcomAnim.LOOPS).map(k => `<option value="${k}"${(c.anim || "none") === k ? " selected" : ""}>${EcomAnim.LOOPS[k].label}</option>`).join("")}</select></div>`;
+    if (c.type === "text") h += `<div class="row"><label class="chk2"><input type="checkbox" data-env="1"${c.env !== false ? " checked" : ""}> Apparition et disparition en « pop »</label></div>`;
+    h += `${row("duration", "Durée", 1, c.type === "text" ? 30 : 10, +c.duration.toFixed(1), " s", 0.5)}${c.type === "sticker" ? `<div class="insp-hint">Apparition « pop » + mouvement en boucle + disparition.</div>` : ""}</div>`;
   }
   h += `<div class="insp-sec"><div class="insp-hint">Début : ${fmt(c.start, 1)} • Durée : ${fmt(c.duration, 1)}<br>Glissez les bords du clip pour le rogner.</div></div>`;
   box.innerHTML = h;
-  refreshFxActive();
+  refreshFxActive(); refreshTrActive();
+}
+let txtTimer = 0;
+function regenText(c) {
+  const r = EcomText.render(c.text || " ", c.ts);
+  c.img = r.url; c.srcW = r.w; c.srcH = r.h; c.imgVer = (c.imgVer || 0) + 1;
+  c.name = (c.text || "").replace(/\s+/g, " ").trim().slice(0, 24) || "Texte";
+}
+function scheduleText(c) {
+  clearTimeout(txtTimer);
+  txtTimer = setTimeout(() => { regenText(c); renderTimeline(); syncMedia(true); updateSelBox(); }, 45);
 }
 function initProps() {
   const box = $("inspector");
   box.addEventListener("input", e => {
-    const k = e.target.dataset.p, c = getSel(); if (!k || !c || e.target.tagName === "SELECT") return;
-    const v = +e.target.value;
+    const c = getSel(); if (!c) return;
+    const t = e.target;
+    if (t.dataset.text) { c.text = t.value; scheduleText(c); return; }
+    if (t.dataset.tsc) { c.ts[t.dataset.tsc] = t.checked; scheduleText(c); renderPropsKeepFocus(); return; }
+    if (t.dataset.ts) {
+      c.ts[t.dataset.ts] = t.type === "range" ? +t.value : t.value;
+      if (t.type === "range") t.previousElementSibling.querySelector("span").textContent = t.value + (t.dataset.u || "");
+      scheduleText(c); if (t.tagName === "SELECT") renderPropsKeepFocus(); return;
+    }
+    if (t.dataset.env) { c.env = t.checked; syncMedia(true); return; }
+    const k = t.dataset.p; if (!k || t.tagName === "SELECT") return;
+    const v = +t.value;
     if (k === "duration") {
-      if (overlaps(c, c.track, c.start, v)) { e.target.value = c.duration; return; }
+      if (overlaps(c, c.track, c.start, v)) { t.value = c.duration; return; }
       c.duration = v; renderTimeline();
-    } else c[k] = v;
-    e.target.previousElementSibling.querySelector("span").textContent = e.target.value + (e.target.dataset.u || "");
+    } else if (k === "transdur") { if (c.trans) c.trans.dur = v; renderTimeline(); }
+    else c[k] = v;
+    t.previousElementSibling.querySelector("span").textContent = t.value + (t.dataset.u || "");
     syncMedia(true); updateSelBox();
   });
   box.addEventListener("change", e => {
     const k = e.target.dataset.p, c = getSel(); if (!c) return;
     if (k === "anim") { c.anim = e.target.value; pause(); seek(c.start); play(); }
+    if (e.target.type === "range") e.target.blur();
   });
   box.addEventListener("click", e => {
     const c = getSel(); if (!c) return;
-    if (e.target.id === "resetProps") { c.scale = 100; c.x = 0; c.y = 0; if (c.type === "sticker") c.scale = 30; renderProps(); updateSelBox(); syncMedia(true); }
-    if (e.target.dataset.fit) { c.fit = e.target.dataset.fit; renderProps(); syncMedia(true); updateSelBox(); }
-    if (e.target.dataset.fxrm) { c.fx = (c.fx || []).filter(x => x !== e.target.dataset.fxrm); renderProps(); syncMedia(true); }
-    if (e.target.id === "fxClear") { c.fx = []; renderProps(); syncMedia(true); }
+    const t = e.target;
+    if (t.id === "resetProps") { c.scale = 100; c.x = 0; c.y = 0; if (isOv(c)) c.scale = c.type === "text" ? 60 : 30; renderProps(); updateSelBox(); syncMedia(true); }
+    if (t.dataset.fit) { c.fit = t.dataset.fit; renderProps(); syncMedia(true); updateSelBox(); }
+    if (t.dataset.fxrm) { c.fx = (c.fx || []).filter(x => x !== t.dataset.fxrm); renderProps(); syncMedia(true); }
+    if (t.id === "fxClear") { c.fx = []; renderProps(); syncMedia(true); }
+    if (t.dataset.trrm) { c.trans = null; renderProps(); renderTimeline(); syncMedia(true); }
+    if (t.dataset.tsb) { c.ts[t.dataset.tsb] = !c.ts[t.dataset.tsb]; regenText(c); renderProps(); renderTimeline(); syncMedia(true); updateSelBox(); }
+    if (t.dataset.align) { c.ts.align = t.dataset.align; regenText(c); renderProps(); syncMedia(true); }
   });
 }
+// ré-affiche l'inspecteur sans perdre le curseur dans la zone de texte
+function renderPropsKeepFocus() { const a = document.activeElement; const key = a && (a.dataset.ts || a.dataset.tsc); clearTimeout(txtTimer); const c = getSel(); if (c) { regenText(c); } renderProps(); renderTimeline(); syncMedia(true); updateSelBox(); if (key) { const n = $("inspector").querySelector(`[data-ts="${key}"],[data-tsc="${key}"]`); if (n) n.focus(); } }
 
 /* ---------- Panneaux ---------- */
-const TITLES = { media: "Médias", audio: "Audio", text: "Texte", effects: "Effets", stickers: "Stickers", captions: "Légendes", effects: "Effets", transitions: "Transitions" };
+const TITLES = { media: "Médias", text: "Texte", effects: "Effets", stickers: "Stickers", captions: "Légendes", transitions: "Transitions" };
 function showPanel(name) {
   currentPanel = name; $("panelTitle").textContent = TITLES[name] || name;
+  $("importBtn").style.display = name === "media" ? "" : "none";
   document.querySelectorAll(".tool").forEach(b => b.classList.toggle("active", b.dataset.panel === name));
   const pc = $("panelContent");
-  if (name === "media") pc.innerHTML = `<div id="mediaList"></div><p class="tip">Glissez un média sur une piste de la timeline (V1 à V3), ou double-cliquez pour l'ajouter.</p>`;
-  else if (name === "audio") pc.innerHTML = `<div class="panel-pad"><button id="addTrackBtn2" class="primary wide">＋ Ajouter piste audio</button></div><div id="mediaList"></div><p class="tip">Glissez un son sur A1, A2, A3 ou sur la zone « nouvelle piste ». Une vidéo glissée sur une piste audio n'en garde que le son.</p>`;
+  if (name === "media") {
+    const tabs = [["all", "Tous"], ["video", "Vidéos"], ["image", "Photos"], ["audio", "Audios"]].map(x => `<button data-mf="${x[0]}" class="${mediaFilter === x[0] ? "on" : ""}">${x[1]}</button>`).join("");
+    pc.innerHTML = `<div class="media-tabs">${tabs}</div><div id="mediaList"></div><p class="tip">Importez ici vos vidéos, photos et sons. Glissez un média sur une piste de la timeline (V1 à V3 pour vidéos et photos, A1 à A3 pour les sons), ou double-cliquez pour l'ajouter.</p>`;
+  }
   else if (name === "stickers") pc.innerHTML = `<div class="sticker-grid">${STICKERS.map(st => `<div class="stk" draggable="true" data-stk="${st.id}" title="${esc(st.name)}"><img src="${stickerDir ? fileUrl(stickerPath(st.id)) : ""}"><small>${esc(st.name)}</small></div>`).join("")}</div><p class="tip">Cliquez sur un sticker pour l'ajouter à la tête de lecture (3 s, animé), ou glissez-le sur une piste vidéo. Réglez taille, position et animation dans le panneau de droite.</p>`;
+  else if (name === "text") pc.innerHTML = textHtml();
+  else if (name === "transitions") { pc.innerHTML = transitionsHtml(); refreshTrActive(); }
   else if (name === "effects") { pc.innerHTML = effectsHtml(); refreshFxActive(); }
   else if (name === "captions") { pc.innerHTML = captionsHtml(); bindCaptions(); }
-  else pc.innerHTML = `<div class="media-card">Bientôt disponible</div>`;
   renderMedia();
+}
+/* ---------- Texte (panneau) ---------- */
+const txtThumbs = {};
+function textHtml() {
+  const items = EcomText.PRESETS.map(p => {
+    if (!txtThumbs[p.id]) txtThumbs[p.id] = EcomText.render("Aa", p.ts, 90).url;
+    return `<div class="txt" draggable="true" data-txt="${p.id}" title="${esc(p.name)}"><img src="${txtThumbs[p.id]}"><small>${esc(p.name)}</small></div>`;
+  }).join("");
+  return `<div class="panel-pad"><button class="primary wide" data-txt="classic">＋ Ajouter un texte</button></div><div class="txt-grid">${items}</div><p class="tip">Cliquez sur un style pour l'ajouter à la tête de lecture (3 s), ou glissez-le sur une piste vidéo. Modifiez le texte, la police, les couleurs, le contour, l'ombre et le fond dans le panneau de droite. Glissez le texte dans l'aperçu pour le déplacer, tirez un coin pour l'agrandir.</p>`;
+}
+/* ---------- Transitions ---------- */
+function transitionsHtml() {
+  const tabs = Object.keys(EcomTR.CATS).map(k => `<button data-trcat="${k}" class="${trCat === k ? "on" : ""}">${EcomTR.CATS[k]}</button>`).join("");
+  const sample = fxDir ? fileUrl(joinDir(fxDir, "sample.jpg")) : "";
+  const items = EcomTR.LIST.filter(t => trCat === "all" || t.cat === trCat).map(t => `<div class="tr" data-tr="${t.id}" title="${esc(t.name)}"><div class="trthumb"><img class="ta" src="${sample}"><img class="tb2" src="${sample}"></div><small>${esc(t.name)}</small></div>`).join("");
+  return `<div class="fx-tabs">${tabs}</div><div class="fx-grid">${items}</div><p class="tip">Placez deux clips côte à côte sur la même piste, sélectionnez l'un des deux puis cliquez sur une transition : elle se joue au raccord (la dernière image du premier clip sort pendant que le second entre). Recliquez pour la retirer. Survolez une transition pour voir son animation. Réglez sa durée dans le panneau de droite.</p>`;
+}
+function refreshTrActive() {
+  const c = getSel(), B = c && c.kind === "video" ? (prevAdj(c) ? c : nextAdj(c)) : null, on = B && B.trans ? B.trans.id : "";
+  document.querySelectorAll(".tr").forEach(el => el.classList.toggle("on", el.dataset.tr === on));
+}
+function applyTransition(id) {
+  const c = getSel(), T = EcomTR.BY[id];
+  if (!c || c.kind !== "video" || (c.type !== "video" && c.type !== "image")) return setStatus("Sélectionnez d'abord un clip vidéo ou photo dans la timeline, puis cliquez sur la transition.");
+  let B = c;
+  if (!prevAdj(c)) { const n = nextAdj(c); if (n) B = n; else return setStatus("Placez deux clips côte à côte sur la même piste pour ajouter une transition entre eux."); }
+  if (B.trans && B.trans.id === id) { B.trans = null; setStatus(`Transition « ${T.name} » retirée`); }
+  else {
+    B.trans = { id, dur: B.trans ? B.trans.dur : 0.8 };
+    setStatus(`Transition « ${T.name} » ajoutée entre « ${prevAdj(B).name} » et « ${B.name} »`);
+    state.selected = B.id; seek(Math.max(0, B.start - 1)); P.stopAt = B.start + Math.min(B.trans.dur, B.duration) + 0.6; play();
+  }
+  renderTimeline(); renderProps(); refreshTrActive(); syncMedia(true); updateUI();
+}
+let trCat = "all", demo = null;
+function applyDemo(el, st, T) { const m = el.style; m.transformOrigin = T.td ? "0 0" : "50% 50%"; m.transform = st.transform; m.opacity = st.opacity; m.clipPath = st.clip; m.visibility = st.visible ? "visible" : "hidden"; m.zIndex = st.z; }
+function stopDemo() {
+  if (!demo) return; cancelAnimationFrame(demo.raf);
+  const A = demo.card.querySelector(".ta"), B = demo.card.querySelector(".tb2");
+  [A, B].forEach(e => { e.removeAttribute("style"); }); demo = null;
+}
+function startDemo(card) {
+  stopDemo();
+  const T = EcomTR.BY[card.dataset.tr], box = card.querySelector(".trthumb"), A = box.querySelector(".ta"), B = box.querySelector(".tb2");
+  demo = { card, raf: 0, t0: performance.now() };
+  const step = now => {
+    if (!demo || demo.card !== card) return;
+    const Fw = box.clientWidth, Fh = box.clientHeight, p = Math.min(1, ((now - demo.t0) % 2200) / 1400);
+    applyDemo(B, EcomTR.layerState(T, "b", p, Fw, Fh), T); applyDemo(A, EcomTR.layerState(T, "g", p, Fw, Fh), T);
+    demo.raf = requestAnimationFrame(step);
+  };
+  demo.raf = requestAnimationFrame(step);
 }
 /* ---------- Effets ---------- */
 function effectsHtml() {
@@ -472,14 +623,25 @@ function addAudioTrack() {
 }
 
 /* ---------- Légendes automatiques ---------- */
+const PROV = {
+  groq: { name: "Groq — Whisper", free: true, site: "console.groq.com/keys", note: "Très rapide, offre gratuite généreuse." },
+  gemini: { name: "Google Gemini", free: true, site: "aistudio.google.com/apikey", note: "Offre gratuite via Google AI Studio. Horodatage approximatif." },
+  mistral: { name: "Mistral — Voxtral", free: true, site: "console.mistral.ai/api-keys", note: "Offre gratuite « Experiment ». La langue est détectée automatiquement." },
+  openai: { name: "OpenAI — Whisper", free: false, site: "platform.openai.com/api-keys", note: "Payant à l'usage, très précis." },
+  deepgram: { name: "Deepgram — Nova-3", free: false, site: "console.deepgram.com", note: "Payant à l'usage (crédit d'essai offert à l'inscription), très rapide." }
+};
+function provInfo(id) { const p = PROV[id]; return `<b>${p.free ? "Gratuit" : "Payant"}</b> — ${p.note}<br>Créez votre clé sur : ${p.site}`; }
+function keyPlaceholder(id) { return capSettings.has && capSettings.has[id] ? "Clé enregistrée — laisser vide pour la conserver" : "Collez votre clé API ici"; }
 function captionsHtml() {
   const list = state.captions.map((c, i) => `<div class="cap-item"><a data-seek="${i}">${fmt(c.start, 1)}</a><input data-cap="${i}" value="${esc(c.text)}"><button data-del="${i}" title="Supprimer">×</button></div>`).join("");
+  const opt = free => Object.keys(PROV).filter(k => PROV[k].free === free).map(k => `<option value="${k}">${PROV[k].name}</option>`).join("");
   return `<div class="panel-pad cap-panel">
-  <label>Service de transcription</label>
-  <select id="capProvider"><option value="groq">Groq (clé gratuite)</option><option value="openai">OpenAI (payant)</option></select>
-  <input id="capKey" type="password" placeholder="${capSettings.hasKey ? "Clé enregistrée — laisser vide pour la conserver" : "Collez votre clé API ici"}">
+  <label>Plateforme de transcription</label>
+  <select id="capProvider"><optgroup label="Gratuites">${opt(true)}</optgroup><optgroup label="Payantes">${opt(false)}</optgroup></select>
+  <small class="muted" id="capInfo">${provInfo(capSettings.provider)}</small>
+  <input id="capKey" type="password" placeholder="${keyPlaceholder(capSettings.provider)}">
   <button id="capSave">Enregistrer la clé</button>
-  <small class="muted">Groq : créez une clé gratuite sur console.groq.com/keys. La clé reste sur cet ordinateur (chiffrée par Windows).</small>
+  <small class="muted">La clé reste sur cet ordinateur (chiffrée par Windows). Chaque plateforme a sa propre clé.</small>
   <label>Langue parlée</label>
   <select id="capLang"><option value="fr">Français</option><option value="en">English</option><option value="pt">Português</option><option value="es">Español</option><option value="auto">Détection automatique</option></select>
   <label>Son à transcrire</label>
@@ -491,10 +653,12 @@ function captionsHtml() {
 }
 function bindCaptions() {
   $("capProvider").value = capSettings.provider;
+  $("capProvider").onchange = () => { capSettings.provider = $("capProvider").value; $("capInfo").innerHTML = provInfo(capSettings.provider); $("capKey").placeholder = keyPlaceholder(capSettings.provider); $("capKey").value = ""; };
   $("capSave").onclick = async () => {
-    await window.ecom.setSettings({ provider: $("capProvider").value, key: $("capKey").value });
-    capSettings = await window.ecom.getSettings(); $("capKey").value = ""; $("capKey").placeholder = capSettings.hasKey ? "Clé enregistrée — laisser vide pour la conserver" : "Collez votre clé API ici";
-    $("capMsg").textContent = capSettings.hasKey ? "Réglages enregistrés ✔" : "Aucune clé enregistrée.";
+    const id = $("capProvider").value;
+    await window.ecom.setSettings({ provider: id, key: $("capKey").value });
+    capSettings = await window.ecom.getSettings(); $("capKey").value = ""; $("capKey").placeholder = keyPlaceholder(id);
+    $("capMsg").textContent = capSettings.has[id] ? "Réglages enregistrés ✔" : "Aucune clé enregistrée.";
   };
   $("capGen").onclick = generateCaptions;
   const clr = $("capClear"); if (clr) clr.onclick = () => { state.captions = []; updateUI(); showPanel("captions"); };
@@ -544,11 +708,12 @@ async function generateCaptions() {
   if (capBusy) return;
   const sources = audioSources($("capSrc").value);
   if (!sources.length) { $("capMsg").textContent = "Aucun son à transcrire : ajoutez une voix off ou une vidéo avec du son sur la timeline."; return; }
-  if (!capSettings.hasKey) { $("capMsg").textContent = "Enregistrez d'abord votre clé API (voir ci-dessus)."; return; }
-  if (state.captions.length && !confirm("Remplacer les légendes existantes ?")) return;
+  const prov = $("capProvider").value; capSettings.provider = prov;
+  if (!(capSettings.has && capSettings.has[prov])) { $("capMsg").textContent = "Enregistrez d'abord votre clé API pour cette plateforme (voir ci-dessus)."; return; }
+  if (state.captions.length && !confirm(EcomI18n.t("Remplacer les légendes existantes ?"))) return;
   capBusy = true; $("capGen").disabled = true; $("capMsg").textContent = "Démarrage…";
   const lang = $("capLang").value;
-  const r = await window.ecom.transcribe({ sources, total: total(), language: lang });
+  const r = await window.ecom.transcribe({ sources, total: total(), language: lang, provider: prov });
   capBusy = false;
   if (!r.ok) { if ($("capMsg")) { $("capGen").disabled = false; $("capMsg").textContent = "❌ " + r.error; } return; }
   state.captions = buildCaptions(r);
@@ -567,23 +732,23 @@ async function openProject() {
   if (!d || !d.state) return setStatus("Projet illisible ou annulé.");
   pause(); state = { ...freshState(), ...d.state, selected: null };
   state.ratio = RATIOS[state.ratio] ? state.ratio : "16:9";
-  (state.clips || []).forEach(c => { if (c.type === "sticker" && c.stickerId) c.path = stickerPath(c.stickerId); c.fx = c.fx || []; c.scale = c.scale || 100; c.x = c.x || 0; c.y = c.y || 0; c.volume = c.volume == null ? 100 : c.volume; });
+  (state.clips || []).forEach(c => { if (c.type === "sticker" && c.stickerId) c.path = stickerPath(c.stickerId); c.fx = c.fx || []; if (c.type === "text" && !c.ts) c.ts = Object.assign({}, EcomText.BASE); c.scale = c.scale || 100; c.x = c.x || 0; c.y = c.y || 0; c.volume = c.volume == null ? 100 : c.volume; });
   P.t = 0; $("zoom").value = state.pps; applyRatio(); showPanel(currentPanel); renderTimeline(); syncMedia(true); updateUI(); setStatus("Projet chargé");
 }
 function newProject() {
-  if (state.clips.length && !confirm("Créer un nouveau projet ? Les modifications non enregistrées seront perdues.")) return;
+  if (state.clips.length && !confirm(EcomI18n.t("Créer un nouveau projet ? Les modifications non enregistrées seront perdues."))) return;
   pause(); state = freshState(); P.t = 0; applyRatio(); showPanel(currentPanel); renderTimeline(); syncMedia(true); updateUI();
 }
 
 /* ---------- Export ---------- */
 function openExport() {
   if (!state.clips.length) return setStatus("Ajoutez des clips à la timeline avant d'exporter.");
-  pause(); const s1 = SIZES["1080"][state.ratio], s2 = SIZES["480"][state.ratio]; $("exportInfo").textContent = `Format ${state.ratio} — 1080p : ${s1[0]}×${s1[1]} • 480p : ${s2[0]}×${s2[1]}`; $("exportLog").textContent = ""; $("expBar").classList.add("hidden"); $("expFill").style.width = "0"; $("exportModal").classList.remove("hidden");
+  pause(); const sz = q => SIZES[q][state.ratio][0] + "×" + SIZES[q][state.ratio][1]; $("exportInfo").textContent = `Format ${state.ratio} — 480p : ${sz("480")} • 720p : ${sz("720")} • 1080p : ${sz("1080")}`; $("exportLog").textContent = ""; $("expBar").classList.add("hidden"); $("expFill").style.width = "0"; $("exportModal").classList.remove("hidden");
 }
 async function doExport() {
   const out = await window.ecom.pickExportPath("EcomVideoStudio-export.mp4"); if (!out) return;
   const T = total();
-  const video = state.clips.filter(c => c.kind === "video").map(c => ({ path: c.path, type: c.type, track: c.track, start: c.start, inPoint: c.inPoint, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fit: c.fit, anim: c.anim, fx: c.fx || [], srcW: c.srcW || 0, srcH: c.srcH || 0 }));
+  const video = state.clips.filter(c => c.kind === "video").map(c => ({ path: c.path, type: c.type, track: c.track, start: c.start, inPoint: c.inPoint, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fit: c.fit, anim: c.anim, fx: c.fx || [], srcW: c.srcW || 0, srcH: c.srcH || 0, trans: c.trans || null, env: c.env, img: c.type === "text" ? c.img : undefined }));
   $("doExport").disabled = true; $("exportLog").textContent = "Export en cours…\n"; $("expBar").classList.remove("hidden");
   const r = await window.ecom.exportVideo({ video, audio: audioSources("all"), total: T, resolution, ratio: state.ratio, output: out, captions: $("burnCaps").checked ? state.captions : [] });
   $("doExport").disabled = false;
@@ -612,13 +777,18 @@ document.querySelectorAll("#ratioGroup button").forEach(b => b.onclick = () => {
 document.querySelector(".side-bottom").onclick = () => showPanel("captions");
 
 const pc = $("panelContent");
-pc.addEventListener("dragstart", e => { const sk = e.target.closest(".stk"); if (sk) { e.dataTransfer.setData("application/x-ecom-sticker", sk.dataset.stk); e.dataTransfer.effectAllowed = "copy"; return; } const it = e.target.closest(".media-item"); if (it) { e.dataTransfer.setData("application/x-ecom-media", it.dataset.id); e.dataTransfer.effectAllowed = "copy"; } });
+pc.addEventListener("dragstart", e => { const tx = e.target.closest(".txt"); if (tx) { e.dataTransfer.setData("application/x-ecom-text", tx.dataset.txt); e.dataTransfer.effectAllowed = "copy"; return; } const sk = e.target.closest(".stk"); if (sk) { e.dataTransfer.setData("application/x-ecom-sticker", sk.dataset.stk); e.dataTransfer.effectAllowed = "copy"; return; } const it = e.target.closest(".media-item"); if (it) { e.dataTransfer.setData("application/x-ecom-media", it.dataset.id); e.dataTransfer.effectAllowed = "copy"; } });
+pc.addEventListener("mouseover", e => { const card = e.target.closest(".tr"); if (card && (!demo || demo.card !== card)) startDemo(card); });
+pc.addEventListener("mouseout", e => { if (demo && !demo.card.contains(e.relatedTarget)) stopDemo(); });
 pc.addEventListener("click", e => {
+  const mf = e.target.closest("[data-mf]"); if (mf) { mediaFilter = mf.dataset.mf; showPanel("media"); return; }
+  const tc = e.target.closest("[data-trcat]"); if (tc) { trCat = tc.dataset.trcat; showPanel("transitions"); return; }
+  const tre = e.target.closest(".tr"); if (tre) { applyTransition(tre.dataset.tr); return; }
+  const tx = e.target.closest("[data-txt]"); if (tx) { addText(EcomText.BY[tx.dataset.txt]); return; }
   const ft = e.target.closest("[data-fxcat]"); if (ft) { fxCat = ft.dataset.fxcat; showPanel("effects"); return; }
   const fe = e.target.closest(".fx"); if (fe) { toggleEffect(fe.dataset.fx); return; }
   const sk = e.target.closest(".stk"); if (sk) { const st = STICKERS.find(x => x.id === sk.dataset.stk); if (st) addSticker(st); return; }
   const b = e.target.closest("[data-add]"); if (b) { const m = state.media.find(x => x.id === b.dataset.add); if (m) quickAdd(m); }
-  if (e.target.id === "addTrackBtn2") addAudioTrack();
 });
 pc.addEventListener("dblclick", e => { const it = e.target.closest(".media-item"); if (it && !e.target.closest("button")) { const m = state.media.find(x => x.id === it.dataset.id); if (m) quickAdd(m); } });
 const leftPanel = document.querySelector(".leftpanel");
@@ -626,13 +796,31 @@ leftPanel.addEventListener("dragover", e => { if (e.dataTransfer.types.includes(
 leftPanel.addEventListener("drop", async e => { if (e.dataTransfer.files.length) { e.preventDefault(); await importPaths(window.ecom.pathsFromFiles(e.dataTransfer.files)); } });
 window.addEventListener("dragover", e => e.preventDefault());
 window.addEventListener("drop", e => e.preventDefault());
+document.addEventListener("mouseup", () => { const a = document.activeElement; if (a && a.type === "range") a.blur(); });
 window.addEventListener("keydown", e => {
   if (/INPUT|SELECT|TEXTAREA/.test(e.target.tagName) && e.target.type !== "range") return;
+  if (e.code === "ArrowLeft" || e.code === "ArrowRight") {
+    e.preventDefault();
+    const step = e.shiftKey ? 1 / 30 : 1;
+    seek(P.t + (e.code === "ArrowLeft" ? -step : step));
+    const tl = $("timeline"), x = LABEL + P.t * state.pps;
+    if (x < tl.scrollLeft + LABEL + 30) tl.scrollLeft = Math.max(0, x - LABEL - 60);
+    else if (x > tl.scrollLeft + tl.clientWidth - 40) tl.scrollLeft = x - tl.clientWidth + 140;
+    return;
+  }
   if (e.code === "Space") { e.preventDefault(); P.playing ? pause() : play(); }
   else if (e.key === "Delete" || e.key === "Backspace") deleteSelected();
 });
 
 initTimeline(); initProps(); initFrameEditing(); $("fxDefs").innerHTML = EcomFX.svgDefs(); showPanel("media"); renderTimeline(); applyRatio(); updateUI();
 window.ecom.getStickerDir().then(d => { stickerDir = d; if (currentPanel === "stickers") showPanel("stickers"); });
-window.ecom.getFxDir().then(d => { fxDir = d; if (currentPanel === "effects") showPanel("effects"); });
+window.ecom.getFxDir().then(d => { fxDir = d; if (currentPanel === "effects" || currentPanel === "transitions") showPanel(currentPanel); });
 window.ecom.getSettings().then(s => { capSettings = s; });
+function setLanguage(l, persist) {
+  EcomI18n.setLang(l); if (persist) window.ecom.setLang(l);
+  document.documentElement.lang = l;
+  document.querySelectorAll("#langSw button").forEach(b => b.classList.toggle("on", b.dataset.lang === l));
+  showPanel(currentPanel); renderTimeline(); renderProps(); updateUI();
+}
+document.querySelectorAll("#langSw button").forEach(b => b.onclick = () => setLanguage(b.dataset.lang, true));
+window.ecom.getLang().then(l => setLanguage(l, false));

@@ -20,18 +20,18 @@
   const ease = x => { x = Math.min(x, 1); const y = x - 1; return 1 + 2.70158 * y * y * y + 1.70158 * y * y; };
 
   // Valeurs à l'instant local t (secondes depuis le début du clip) pour un clip de durée D.
-  function at(loop, t, D) {
+  function at(loop, t, D, noEnv) {
     const L = LOOPS[loop] || LOOPS.none;
     const r = Object.assign({ s: 1, dx: 0, dy: 0, rot: 0 }, L.f ? L.f(t) : {});
-    r.s *= ease(t / IN) * Math.min(1, Math.max(0, (D - t) / OUT));
+    if (!noEnv) r.s *= ease(t / IN) * Math.min(1, Math.max(0, (D - t) / OUT));
     return r;
   }
   // Expressions FFmpeg équivalentes (variable « t » = temps local du clip).
-  function exprs(loop, D) {
+  function exprs(loop, D, noEnv) {
     const L = LOOPS[loop] || LOOPS.none;
     const X = "(min(t/" + IN + ",1)-1)";
     const env = "(1+2.70158*" + X + "*" + X + "*" + X + "+1.70158*" + X + "*" + X + ")*min(1,max(0,(" + D.toFixed(3) + "-t)/" + OUT + "))";
-    return { s: "(" + env + ")*(" + (L.s || "1") + ")", dx: L.dx || "0", dy: L.dy || "0", rot: L.rot || "0" };
+    return { s: noEnv ? "(" + (L.s || "1") + ")" : "(" + env + ")*(" + (L.s || "1") + ")", dx: L.dx || "0", dy: L.dy || "0", rot: L.rot || "0" };
   }
   const api = { LOOPS, at, exprs, IN, OUT };
   if (typeof module !== "undefined" && module.exports) module.exports = api; else root.EcomAnim = api;

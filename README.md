@@ -1,5 +1,14 @@
-# EcomVideoStudio — v1.3.0
+# EcomVideoStudio — v1.4.0
 Logiciel desktop de montage vidéo pour Windows 10+ (Electron + FFmpeg).
+
+## Nouveautés v1.4.0 / What's new
+- **Installateur bilingue** : au lancement du setup, choix de la langue **Français / English**, puis installation. Le logiciel démarre dans la langue choisie ; le bouton **FR | EN** en haut permet d'en changer à tout moment.
+- **Export en 480p, 720p ou 1080p** (dans le format 9:16, 16:9, 4:5 ou 1:1 du projet).
+- **Onglet Audio supprimé** : l'onglet **Médias** importe vidéos, photos et audios (filtres Tous / Vidéos / Photos / Audios).
+- **Transitions (23)** : fondu, fondu au noir, flash blanc, pousser/glisser (4 directions), volets, iris, zooms, rotation et **3D** (retournement, bascule, cube, cube vertical, porte). Deux clips côte à côte sur la même piste, sélection, clic sur la transition ; durée réglable à droite.
+- **Textes (16 styles)** : polices, couleurs et effets différents ; ajout par clic ou glisser-déposer ; texte, police, couleurs, dégradé, contour, ombre/lueur, fond, espacement, taille, animation modifiables à droite et déplaçables dans l'aperçu.
+- **Flèches ← →** : la tête de lecture avance/recule de 1 seconde (Maj + flèche : 1 image).
+- **Légendes automatiques : 5 plateformes** — gratuites : **Groq**, **Google Gemini**, **Mistral Voxtral** ; payantes : **OpenAI**, **Deepgram**. Une clé API par plateforme.
 
 ## Nouveautés v1.3.0
 - **Logo et icône** du logiciel : lettre E + pellicule rouge 3D (fenêtre, installeur, raccourcis).

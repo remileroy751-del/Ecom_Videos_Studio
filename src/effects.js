@@ -95,7 +95,7 @@
 
   // Export : chaîne de filtres FFmpeg (couleur puis géométrie puis fondu) pour un clip.
   // box = [bw, bh] ; cw/ch = taille du contenu (peut être null) ; D = durée.
-  function ffChain(ids, bw, bh, cw, ch, D) {
+  function ffChain(ids, bw, bh, cw, ch, D, opts) {
     const parts = [];
     (ids || []).forEach(id => {
       const e = BY[id]; if (!e || e.overlay || e.geo || e.fade) return;
@@ -109,7 +109,7 @@
       const e = BY[id]; if (!e || !e.geo) return;
       if (e.geo === "mirror") parts.push("hflip");
       if (e.geo === "flip") parts.push("vflip");
-      if (!cw || !ch) return;
+      if ((opts && opts.noGeo) || !cw || !ch) return;
       if (e.geo === "shake") parts.push(`scale=${even(cw * 1.08)}:${even(ch * 1.08)},crop=${cw}:${ch}:x='(iw-ow)/2+sin(t*38)*iw*0.012':y='(ih-oh)/2+cos(t*31)*ih*0.012'`);
       if (e.geo === "zoom") parts.push(`format=rgba,scale=w='${cw}*(1+0.06*(1+sin(2*PI*1.2*t))/2)':h='${ch}*(1+0.06*(1+sin(2*PI*1.2*t))/2)':eval=frame,crop=${cw}:${ch}:x='(iw-ow)/2':y='(ih-oh)/2'`);
     });

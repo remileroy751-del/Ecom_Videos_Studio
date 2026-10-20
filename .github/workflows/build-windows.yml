@@ -19,6 +19,8 @@ jobs:
           node-version: 22
       - name: Install dependencies
         run: npm install --no-audit --no-fund
+      - name: Verify installer configuration
+        run: node scripts/fix-config.js
       - name: Build Windows installer
         run: npm run dist
       - name: Upload installer

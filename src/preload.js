@@ -4,6 +4,8 @@ contextBridge.exposeInMainWorld("ecom", {
   probe: f => ipcRenderer.invoke("probe", f),
   thumb: (f, d) => ipcRenderer.invoke("thumb", f, d),
   getStickerDir: () => ipcRenderer.invoke("sticker-dir"),
+  getLang: () => ipcRenderer.invoke("get-lang"),
+  setLang: l => ipcRenderer.invoke("set-lang", l),
   getFxDir: () => ipcRenderer.invoke("fx-dir"),
   saveProject: d => ipcRenderer.invoke("save-project", d),
   loadProject: () => ipcRenderer.invoke("load-project"),

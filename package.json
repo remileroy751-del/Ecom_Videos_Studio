@@ -1,6 +1,6 @@
 {
   "name": "ecomvideostudio",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Ecom Video Studio - logiciel de montage vidéo par Ecom Academy",
   "main": "src/main.js",
   "author": "ECOM ACADEMY",
@@ -51,7 +51,13 @@
       "createStartMenuShortcut": true,
       "installerIcon": "assets/icon.ico",
       "uninstallerIcon": "assets/icon.ico",
-      "installerHeaderIcon": "assets/icon.ico"
+      "installerHeaderIcon": "assets/icon.ico",
+      "multiLanguageInstaller": true,
+      "displayLanguageSelector": true,
+      "installerLanguages": [
+        "fr_FR",
+        "en_US"
+      ]
     },
     "publish": null,
     "asarUnpack": [

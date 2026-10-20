@@ -150,3 +150,23 @@ button:disabled{opacity:.5;cursor:default}
 .chip{display:inline-flex;align-items:center;gap:5px;background:#16233f;border:1px solid #2f4b8a;border-radius:12px;padding:3px 4px 3px 9px;font-size:11px}
 .chip button{padding:0 6px;font-size:13px;line-height:1.3;border-radius:50%}
 .statusbar .credit{font-size:11px}
+
+.quality-grid{grid-template-columns:repeat(3,1fr)}
+.langsw{display:flex;border:1px solid #303746;border-radius:8px;overflow:hidden;margin-right:6px}
+.langsw button{border:0;border-radius:0;padding:8px 11px;font-size:12px;background:#0f131b}.langsw button.on{background:var(--blue);color:#fff}
+.layer .mn,.layer .gh{position:absolute;inset:0}.layer .gh{display:none}
+.tbadge{position:absolute;left:3px;top:2px;z-index:3;font-size:11px;background:#2f7bff;color:#fff;border-radius:7px;padding:0 4px;font-style:normal;pointer-events:none}
+.tr{background:var(--panel2);border:2px solid transparent;border-radius:9px;padding:5px;cursor:pointer;display:flex;flex-direction:column;gap:4px}
+.tr:hover{background:#1a2030}.tr.on{border-color:#2f7bff;background:#16233f}
+.trthumb{position:relative;aspect-ratio:16/10;overflow:hidden;border-radius:6px;background:#000}
+.trthumb img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;pointer-events:none}
+.trthumb .tb2{visibility:hidden;filter:hue-rotate(150deg) saturate(1.3)}
+.tr small{font-size:10px;text-align:center;color:#c3c9d6;line-height:1.2}
+.media-tabs{display:flex;gap:6px;padding:12px 12px 0;flex-wrap:wrap}.media-tabs button{padding:5px 10px;font-size:11px;border-radius:14px}.media-tabs button.on{background:var(--blue);border-color:var(--blue)}
+.txt-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;padding:12px}
+.txt{background:#1c2230;border-radius:9px;padding:8px;cursor:grab;display:flex;flex-direction:column;align-items:center;gap:6px;border:1px solid transparent}
+.txt:hover{background:#232b3e;border-color:#3a4a78}.txt img{width:100%;height:46px;object-fit:contain;pointer-events:none}.txt small{font-size:10px;color:#8d95a3;pointer-events:none}
+.row textarea{width:100%;min-height:62px;background:#0b0e14;color:var(--text);border:1px solid #303746;border-radius:6px;padding:7px;font-size:13px;resize:vertical;font-family:inherit}
+.row .two{display:flex;gap:8px;align-items:center}.row input[type=color]{width:42px;height:28px;padding:0;border:1px solid #303746;border-radius:5px;background:#0b0e14;cursor:pointer}
+.row .chk2{display:flex;align-items:center;gap:7px;font-size:11px;color:#c3c9d6;justify-content:flex-start}
+.seg button{min-width:0}
