@@ -1,5 +1,11 @@
-# EcomVideoStudio — v1.4.0
+# EcomVideoStudio — v1.5.0
 Logiciel desktop de montage vidéo pour Windows 10+ (Electron + FFmpeg).
+
+## Nouveautés v1.5.0 / What's new
+- **Pistes V1, V2, V3** : bouton **œil** (masquer / afficher la piste) et bouton **haut-parleur** (couper / activer le son). Les pistes audio A1 à A3 ont aussi leur haut-parleur. Une piste masquée ou muette est aussi ignorée à l'export.
+- **Déplacement des clips à la souris** comme dans CapCut : glisser-déposer sur la même piste ou vers une autre, aimantation aux bords des autres clips et à la tête de lecture ; déposer un clip sur un autre l'**insère** avant ou après (les clips suivants sont décalés).
+- **Médias** : bouton **corbeille** sur chaque média. Si le média est utilisé dans le montage, un message demande « Ce média se trouve dans le montage. Supprimer ? » (Oui / Non) ; en cas de Oui, il disparaît aussi du montage.
+- **Lecture plus fluide** : préchargement du clip suivant (changement de clip sans coupure), synchronisation douce de l'image et du son, copies d'aperçu légères (540p) créées automatiquement pour les vidéos lourdes (l'export utilise toujours les originaux), interface allégée pendant la lecture.
 
 ## Nouveautés v1.4.0 / What's new
 - **Installateur bilingue** : au lancement du setup, choix de la langue **Français / English**, puis installation. Le logiciel démarre dans la langue choisie ; le bouton **FR | EN** en haut permet d'en changer à tout moment.

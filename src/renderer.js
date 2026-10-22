@@ -1,6 +1,6 @@
 /* EcomVideoStudio — interface : 3 pistes vidéo, 3 pistes audio, légendes automatiques */
 const $ = id => document.getElementById(id);
-const LABEL = 70;
+const LABEL = 96;
 const IMG_EXT = /\.(jpe?g|png|webp|bmp|gif)$/i, AUD_EXT = /\.(mp3|wav|aac|m4a|ogg|flac)$/i, VID_EXT = /\.(mp4|mov|mkv|avi|webm|m4v|wmv|flv|mpe?g|3gp)$/i;
 let uid = 0;
 const newId = () => "i" + Date.now().toString(36) + (uid++);
@@ -10,7 +10,7 @@ function fileUrl(p) { return encodeURI("file:///" + p.replace(/\\/g, "/")).repla
 function fmt(s, dec) { s = Math.max(0, s || 0); const m = Math.floor(s / 60), r = s - m * 60; return String(m).padStart(2, "0") + ":" + (dec ? r.toFixed(1).padStart(4, "0") : String(Math.floor(r)).padStart(2, "0")); }
 
 let state = freshState();
-function freshState() { return { media: [], clips: [], audioTracks: 1, captions: [], selected: null, resolution: "1080", ratio: "16:9", pps: 40 }; }
+function freshState() { return { media: [], clips: [], audioTracks: 1, captions: [], selected: null, resolution: "1080", ratio: "16:9", pps: 40, trackHidden: [false, false, false], trackMuted: [false, false, false], audioMuted: [false, false, false] }; }
 const isStill = c => c.type === "image" || c.type === "sticker" || c.type === "text";
 const isOv = c => c.type === "sticker" || c.type === "text";
 let stickerDir = "", fxDir = "", fxCat = "all";
@@ -24,43 +24,101 @@ const total = () => state.clips.reduce((m, c) => Math.max(m, c.start + c.duratio
 const getSel = () => state.clips.find(c => c.id === state.selected);
 const clipAt = (kind, track, t) => state.clips.find(c => c.kind === kind && c.track === track && t >= c.start - 1e-6 && t < c.start + c.duration - 1e-6);
 
-/* ---------- Aperçu : 3 couches vidéo + 3 lecteurs audio ---------- */
+/* ---------- Aperçu : 3 couches vidéo (double tampon) + 3 pistes audio (double tampon) ---------- */
+// Styles écrits seulement s'ils changent (évite des recalculs inutiles pendant la lecture)
+function ps(el, prop, val) { const c = el._c || (el._c = {}); if (c[prop] === val) return; c[prop] = val; el.style[prop] = val; }
+const pv = c => c.proxy || c.path;            // fichier utilisé pour l'aperçu (proxy léger si disponible)
 const layers = [], aEls = [];
 for (let i = 0; i < 3; i++) {
+  const L = { cur: null, gcur: null };
+  const mkv = () => { const v = document.createElement("video"); v.playsInline = true; v.preload = "auto"; v.disablePictureInPicture = true; v.addEventListener("loadeddata", () => { if (L.v === v && !P.playing) syncMedia(true); }); return v; };
   const wrap = document.createElement("div"); wrap.className = "layer"; wrap.style.zIndex = i + 1;
-  const v = document.createElement("video"); v.playsInline = true; v.preload = "auto"; v.addEventListener("loadeddata", () => syncMedia(true));
+  const vs = [mkv(), mkv()]; vs[1].style.display = "none";
   const img = document.createElement("img");
   const vig = document.createElement("div"); vig.className = "vig";
   const bars = document.createElement("div"); bars.className = "bars";
   const fxv = [0, 1].map(() => { const f = document.createElement("video"); f.className = "fxv"; f.muted = true; f.loop = true; f.playsInline = true; f.style.display = "none"; return f; });
-  const main = document.createElement("div"); main.className = "mn"; main.append(v, img, vig, bars, ...fxv);
-  const gv = document.createElement("video"); gv.playsInline = true; gv.preload = "auto"; gv.muted = true; gv.addEventListener("loadeddata", () => syncMedia(true));
+  const main = document.createElement("div"); main.className = "mn"; main.append(vs[0], vs[1], img, vig, bars, ...fxv);
+  const gv = document.createElement("video"); gv.playsInline = true; gv.preload = "auto"; gv.muted = true; gv.addEventListener("loadeddata", () => { if (!P.playing) syncMedia(true); });
   const gi = document.createElement("img"), gh = document.createElement("div"); gh.className = "gh"; gh.append(gv, gi);
   wrap.append(gh, main); $("layers").appendChild(wrap);
-  layers.push({ wrap, main, gh, gv, gi, v, img, vig, bars, fxv, cur: null, gcur: null });
-  const a = new Audio(); a.preload = "auto"; a.addEventListener("loadeddata", () => syncMedia(true)); aEls.push({ a, cur: null });
+  Object.assign(L, { wrap, main, gh, gv, gi, vs, v: vs[0], img, vig, bars, fxv });
+  layers.push(L);
+  const mka = () => { const a = new Audio(); a.preload = "auto"; return a; };
+  const as = [mka(), mka()]; const A = { as, a: as[0], cur: null };
+  as.forEach(a => a.addEventListener("loadeddata", () => { if (A.a === a && !P.playing) syncMedia(true); }));
+  aEls.push(A);
 }
 
-function drive(el, c, t, sw) {
+// Lecture d'un élément média calé sur l'horloge du projet (synchronisation douce : pas de saccade)
+function drive(el, c, t, hard, mute) {
   const target = c.inPoint + (t - c.start);
-  el.volume = clamp(c.volume / 100, 0, 1);
-  const diff = Math.abs(el.currentTime - target);
-  if (sw || diff > 0.35 || (!P.playing && diff > 0.04)) { try { el.currentTime = target; } catch (e) {} }
-  if (P.playing) { if (el.paused) el.play().catch(() => {}); } else if (!el.paused) el.pause();
+  const vol = mute ? 0 : clamp(c.volume / 100, 0, 1);
+  if (el.volume !== vol) el.volume = vol;
+  const err = el.currentTime - target, ad = Math.abs(err);
+  if (P.playing) {
+    if (ad > hard) { try { el.currentTime = target; } catch (e) {} if (el.playbackRate !== 1) el.playbackRate = 1; }
+    else if (hard > 0.3 && ad > 0.07) el.playbackRate = err > 0 ? 0.94 : 1.06;   // rattrapage progressif
+    else if (el.playbackRate !== 1) el.playbackRate = 1;
+    if (el.paused) el.play().catch(() => {});
+  } else {
+    if (ad > 0.04) { try { el.currentTime = target; } catch (e) {} }
+    if (!el.paused) el.pause();
+    if (el.playbackRate !== 1) el.playbackRate = 1;
+  }
 }
 function setSrc(el, p, key) { const k = key || p; if (el.dataset.src !== k) { el.dataset.src = k; el.src = key ? p : fileUrl(p); } }
+// Prend l'élément « de réserve » déjà préchargé pour ce clip (changement de clip sans coupure)
+function takeStandby(L, c) {
+  if (L.cur === c.id) return false;
+  const sb = L.vs[0] === L.v ? L.vs[1] : L.vs[0];
+  if (sb.dataset.pre === c.id && sb.dataset.src === pv(c)) {
+    const old = L.v; ps(old, "display", "none"); if (!old.paused) old.pause(); old.dataset.pre = "";
+    L.v = sb; sb.dataset.pre = ""; return true;
+  }
+  return false;
+}
+function takeStandbyAudio(A, c) {
+  if (A.cur === c.id) return false;
+  const sb = A.as[0] === A.a ? A.as[1] : A.as[0];
+  if (sb.dataset.pre === c.id && sb.dataset.src === pv(c)) { const old = A.a; if (!old.paused) old.pause(); old.dataset.pre = ""; A.a = sb; sb.dataset.pre = ""; return true; }
+  return false;
+}
+function nextClip(kind, track, t, types) {
+  let best = null;
+  state.clips.forEach(c => { if (c.kind === kind && c.track === track && c.start > t + 1e-6 && c.start - t < 2.5 && types.indexOf(c.type) >= 0 && (!best || c.start < best.start)) best = c; });
+  return best;
+}
+// Précharge les prochains clips (vidéo, fantôme de transition, audio) pendant que le clip courant joue
+function preloadAhead(t) {
+  for (let i = 0; i < 3; i++) {
+    const L = layers[i], n = nextClip("video", i, t, ["video"]);
+    if (n) {
+      const sb = L.vs[0] === L.v ? L.vs[1] : L.vs[0];
+      if (sb.dataset.pre !== n.id) { sb.dataset.pre = n.id; setSrc(sb, pv(n)); try { sb.currentTime = n.inPoint; } catch (e) {} }
+      const A = n.trans ? prevAdj(n) : null;
+      if (A && A.type === "video" && L.gcur !== A.id && L.gh.style.display === "none") { setSrc(L.gv, pv(A)); try { L.gv.currentTime = Math.max(0, A.inPoint + A.duration - 0.05); } catch (e) {} L.gcur = A.id; }
+    }
+    const na = nextClip("audio", i, t, ["audio"]), Au = aEls[i];
+    if (na) {
+      const sb = Au.as[0] === Au.a ? Au.as[1] : Au.as[0];
+      if (sb.dataset.pre !== na.id) { sb.dataset.pre = na.id; setSrc(sb, pv(na)); try { sb.currentTime = na.inPoint; } catch (e) {} }
+    }
+  }
+}
 
 function applyFx(L, c, t, force) {
   const tl = clamp(t - c.start, 0, c.duration);
   const f = isOv(c) ? null : EcomFX.preview(c.fx, tl, c.duration);
   const css = f ? f.css : "", tf = f ? f.tf : "";
-  L.v.style.filter = css; L.img.style.filter = css; L.v.style.transform = tf; L.img.style.transform = tf;
-  L.wrap.style.opacity = f ? f.opacity : 1;
-  L.vig.style.display = f && f.vig ? "block" : "none"; L.bars.style.display = f && f.bars ? "block" : "none";
+  L.vs.forEach(v => { ps(v, "filter", css); ps(v, "transform", tf); });
+  ps(L.img, "filter", css); ps(L.img, "transform", tf);
+  ps(L.wrap, "opacity", f ? String(f.opacity) : "1");
+  ps(L.vig, "display", f && f.vig ? "block" : "none"); ps(L.bars, "display", f && f.bars ? "block" : "none");
   L.fxv.forEach((fv, k) => {
     const id = f && f.overlays[k];
-    if (!id) { if (fv.style.display !== "none") { fv.style.display = "none"; fv.pause(); } return; }
-    fv.style.display = "block"; setSrc(fv, fxPath(id));
+    if (!id) { if (fv.style.display !== "none") { ps(fv, "display", "none"); fv.pause(); } return; }
+    ps(fv, "display", "block"); setSrc(fv, fxPath(id));
     if (P.playing) { if (fv.paused) fv.play().catch(() => {}); }
     else { if (!fv.paused) fv.pause(); if (force) { try { fv.currentTime = tl % 3; } catch (e) {} } }
   });
@@ -68,23 +126,24 @@ function applyFx(L, c, t, force) {
 const prevAdj = c => state.clips.find(a => a !== c && a.kind === c.kind && a.track === c.track && (a.type === "video" || a.type === "image") && Math.abs(a.start + a.duration - c.start) < 0.12);
 const nextAdj = c => state.clips.find(a => a !== c && a.kind === c.kind && a.track === c.track && (a.type === "video" || a.type === "image") && Math.abs(c.start + c.duration - a.start) < 0.12);
 function resetTrans(L) {
-  const m = L.main.style; m.transform = ""; m.clipPath = ""; m.opacity = ""; m.visibility = ""; m.zIndex = ""; m.transformOrigin = "";
-  L.gh.style.display = "none"; if (!L.gv.paused) L.gv.pause();
+  const m = L.main;
+  ps(m, "transform", ""); ps(m, "clipPath", ""); ps(m, "opacity", ""); ps(m, "visibility", ""); ps(m, "zIndex", ""); ps(m, "transformOrigin", "");
+  if (L.gh.style.display !== "none") { ps(L.gh, "display", "none"); if (!L.gv.paused) L.gv.pause(); }
 }
 function applyTrans(L, c, t, force) {
   const T = c.trans && EcomTR.BY[c.trans.id], A = T && (c.type === "video" || c.type === "image") ? prevAdj(c) : null;
   const d = T ? Math.max(0.2, Math.min(+c.trans.dur || 0.8, c.duration * 0.9)) : 0, tl = t - c.start;
   if (!A || tl < 0 || tl >= d) { resetTrans(L); return; }
   const F = $("frame"), Fw = F.clientWidth, Fh = F.clientHeight, p = tl / d;
-  const sb = EcomTR.layerState(T, "b", p, Fw, Fh), sg = EcomTR.layerState(T, "g", p, Fw, Fh);
-  const m = L.main.style; m.transformOrigin = T.td ? "0 0" : "50% 50%"; m.transform = sb.transform; m.opacity = sb.opacity; m.clipPath = sb.clip; m.visibility = sb.visible ? "visible" : "hidden"; m.zIndex = sb.z;
-  const g = L.gh.style; g.display = "block"; g.transformOrigin = T.td ? "0 0" : "50% 50%"; g.transform = sg.transform; g.opacity = sg.opacity; g.visibility = sg.visible ? "visible" : "hidden"; g.zIndex = sg.z;
+  const sb = EcomTR.layerState(T, "b", p, Fw, Fh), sg = EcomTR.layerState(T, "g", p, Fw, Fh), org = T.td ? "0 0" : "50% 50%";
+  const m = L.main; ps(m, "transformOrigin", org); ps(m, "transform", sb.transform); ps(m, "opacity", String(sb.opacity)); ps(m, "clipPath", sb.clip); ps(m, "visibility", sb.visible ? "visible" : "hidden"); ps(m, "zIndex", String(sb.z));
+  const g = L.gh; ps(g, "display", "block"); ps(g, "transformOrigin", org); ps(g, "transform", sg.transform); ps(g, "opacity", String(sg.opacity)); ps(g, "visibility", sg.visible ? "visible" : "hidden"); ps(g, "zIndex", String(sg.z));
   const css = EcomFX.preview(A.fx, A.duration, A.duration).css, fit = A.fit === "fill" ? "cover" : "contain";
   if (A.type === "image") {
-    L.gv.style.display = "none"; L.gi.style.display = "block"; setSrc(L.gi, A.path); L.gi.style.filter = css; L.gi.style.objectFit = fit;
+    ps(L.gv, "display", "none"); ps(L.gi, "display", "block"); setSrc(L.gi, pv(A)); ps(L.gi, "filter", css); ps(L.gi, "objectFit", fit);
   } else {
-    L.gi.style.display = "none"; L.gv.style.display = "block"; L.gv.style.filter = css; L.gv.style.objectFit = fit;
-    const first = L.gcur !== A.id; setSrc(L.gv, A.path);
+    ps(L.gi, "display", "none"); ps(L.gv, "display", "block"); ps(L.gv, "filter", css); ps(L.gv, "objectFit", fit);
+    const first = L.gcur !== A.id; setSrc(L.gv, pv(A));
     if (first || force) { L.gcur = A.id; try { L.gv.currentTime = Math.max(0, A.inPoint + A.duration - 0.05); } catch (e) {} }
     if (!L.gv.paused) L.gv.pause();
   }
@@ -92,48 +151,60 @@ function applyTrans(L, c, t, force) {
 function syncMedia(force) {
   const t = P.t;
   for (let i = 0; i < 3; i++) {
-    const L = layers[i], c = clipAt("video", i, t);
-    if (!c) { L.wrap.style.display = "none"; if (!L.v.paused) L.v.pause(); L.fxv.forEach(fv => { if (!fv.paused) fv.pause(); }); L.cur = null; continue; }
-    L.wrap.style.display = "block";
+    const L = layers[i], c = clipAt("video", i, t), hid = !!state.trackHidden[i], mute = !!state.trackMuted[i];
+    if (!c) { ps(L.wrap, "display", "none"); L.vs.forEach(v => { if (!v.paused) v.pause(); }); L.fxv.forEach(fv => { if (!fv.paused) fv.pause(); }); L.cur = null; continue; }
+    ps(L.wrap, "display", hid ? "none" : "block");
     if (isOv(c)) {
-      const a = EcomAnim.at(c.anim || "none", clamp(t - c.start, 0, c.duration), c.duration, c.env === false);
-      L.wrap.style.transform = `translate(${c.x + a.dx * 100}%,${c.y + a.dy * 100}%) rotate(${a.rot}rad) scale(${(c.scale / 100) * a.s})`;
-    } else L.wrap.style.transform = `translate(${c.x}%,${c.y}%) scale(${c.scale / 100})`;
-    const fitMode = c.fit === "fill" ? "cover" : "contain"; L.v.style.objectFit = fitMode; L.img.style.objectFit = fitMode;
-    applyFx(L, c, t, force);
-    if (isOv(c)) resetTrans(L); else applyTrans(L, c, t, force);
+      if (!hid) {
+        const a = EcomAnim.at(c.anim || "none", clamp(t - c.start, 0, c.duration), c.duration, c.env === false);
+        ps(L.wrap, "transform", `translate(${c.x + a.dx * 100}%,${c.y + a.dy * 100}%) rotate(${a.rot}rad) scale(${(c.scale / 100) * a.s})`);
+      }
+    } else ps(L.wrap, "transform", `translate(${c.x}%,${c.y}%) scale(${c.scale / 100})`);
+    const fitMode = c.fit === "fill" ? "cover" : "contain";
+    L.vs.forEach(v => ps(v, "objectFit", fitMode)); ps(L.img, "objectFit", fitMode);
+    if (!hid) { applyFx(L, c, t, force); if (isOv(c)) resetTrans(L); else applyTrans(L, c, t, force); }
     if (isStill(c)) {
-      L.v.style.display = "none"; if (!L.v.paused) L.v.pause();
-      L.img.style.display = "block"; if (c.type === "text") setSrc(L.img, c.img, c.id + ":" + c.imgVer); else setSrc(L.img, c.path); L.cur = c.id;
+      L.vs.forEach(v => { ps(v, "display", "none"); if (!v.paused) v.pause(); });
+      ps(L.img, "display", "block"); if (c.type === "text") setSrc(L.img, c.img, c.id + ":" + c.imgVer); else setSrc(L.img, pv(c)); L.cur = c.id;
     } else {
-      L.img.style.display = "none"; L.v.style.display = "block";
-      const sw = force || L.cur !== c.id; L.cur = c.id;
-      setSrc(L.v, c.path); drive(L.v, c, t, sw);
+      ps(L.img, "display", "none");
+      const switched = L.cur !== c.id; if (switched) takeStandby(L, c);
+      const other = L.vs[0] === L.v ? L.vs[1] : L.vs[0]; ps(other, "display", "none");
+      ps(L.v, "display", "block"); L.cur = c.id;
+      setSrc(L.v, pv(c));
+      drive(L.v, c, t, force ? 0.05 : switched ? 0.2 : 0.45, mute);
     }
   }
   for (let i = 0; i < 3; i++) {
-    const A = aEls[i], c = clipAt("audio", i, t);
-    if (!c) { if (!A.a.paused) A.a.pause(); A.cur = null; continue; }
-    const sw = force || A.cur !== c.id; A.cur = c.id;
-    setSrc(A.a, c.path); drive(A.a, c, t, sw);
+    const A = aEls[i], c = clipAt("audio", i, t), mute = !!state.audioMuted[i];
+    if (!c) { A.as.forEach(a => { if (!a.paused) a.pause(); }); A.cur = null; continue; }
+    const switched = A.cur !== c.id; if (switched) takeStandbyAudio(A, c);
+    A.cur = c.id; setSrc(A.a, pv(c));
+    drive(A.a, c, t, force ? 0.05 : switched ? 0.2 : 0.45, mute);
   }
 }
 
+let lastPre = -9, pendingProxy = [], uiTick = 0, lastTimeTxt = "", lastCap = null;
 function play() {
   if (P.playing || total() <= 0) return;
   if (P.t >= total() - 0.05) P.t = 0;
   P.playing = true; P.last = performance.now(); $("play").textContent = "⏸";
-  syncMedia(true); requestAnimationFrame(tick);
+  syncMedia(true); preloadAhead(P.t); lastPre = P.t; requestAnimationFrame(tick);
 }
-function pause() { P.stopAt = null; P.playing = false; $("play").textContent = "▶"; syncMedia(); }
+function pause() {
+  P.stopAt = null; P.playing = false; $("play").textContent = "▶"; syncMedia();
+  while (pendingProxy.length) pendingProxy.shift()();
+}
 function tick(now) {
   if (!P.playing) return;
-  P.t += (now - P.last) / 1000; P.last = now;
+  P.t += Math.min(0.1, (now - P.last) / 1000); P.last = now;
   if (P.t >= total()) { P.t = total(); pause(); updateUI(); return; }
   if (P.stopAt && P.t >= P.stopAt) { pause(); updateUI(); return; }
-  syncMedia(); updateUI(true); requestAnimationFrame(tick);
+  syncMedia(); updateUI(true);
+  if (P.t - lastPre > 0.3 || P.t < lastPre) { preloadAhead(P.t); lastPre = P.t; }
+  requestAnimationFrame(tick);
 }
-function seek(t) { P.t = clamp(t, 0, Math.max(total(), 0)); syncMedia(true); updateUI(); }
+function seek(t) { P.t = clamp(t, 0, Math.max(total(), 0)); syncMedia(true); preloadAhead(P.t); lastPre = P.t; updateUI(); }
 
 /* ---------- Manipulation directe dans l'aperçu ---------- */
 function clipRect(c) {
@@ -148,7 +219,7 @@ function clipRect(c) {
 }
 function updateSelBox() {
   const b = $("selBox"), c = getSel();
-  if (!c || c.kind !== "video" || P.t < c.start - 1e-6 || P.t >= c.start + c.duration) { b.style.display = "none"; return; }
+  if (!c || c.kind !== "video" || state.trackHidden[c.track] || P.t < c.start - 1e-6 || P.t >= c.start + c.duration) { b.style.display = "none"; return; }
   const r = clipRect(c);
   b.style.display = "block"; b.style.left = (r.cx - r.w / 2) + "px"; b.style.top = (r.cy - r.h / 2) + "px"; b.style.width = r.w + "px"; b.style.height = r.h + "px";
 }
@@ -180,7 +251,7 @@ function initFrameEditing() {
     if (e.target.dataset.h && c) return startResize(e, c);
     if (e.target.id === "selBox" && c) return startMove(e, c);
     const rect = $("frame").getBoundingClientRect(), px = e.clientX - rect.left, py = e.clientY - rect.top;
-    const hit = [2, 1, 0].map(tr => clipAt("video", tr, P.t)).filter(Boolean).find(cl => { const r = clipRect(cl); return Math.abs(px - r.cx) <= r.w / 2 && Math.abs(py - r.cy) <= r.h / 2; });
+    const hit = [2, 1, 0].filter(tr => !state.trackHidden[tr]).map(tr => clipAt("video", tr, P.t)).filter(Boolean).find(cl => { const r = clipRect(cl); return Math.abs(px - r.cx) <= r.w / 2 && Math.abs(py - r.cy) <= r.h / 2; });
     if (hit) { state.selected = hit.id; renderTimeline(); renderProps(); updateUI(); startMove(e, hit); }
     else if (state.selected) { state.selected = null; renderTimeline(); renderProps(); updateUI(); }
   });
@@ -188,21 +259,33 @@ function initFrameEditing() {
 }
 function updateUI(follow) {
   const T = total();
-  $("time").textContent = fmt(P.t) + " / " + fmt(T);
-  $("scrubFill").style.width = (T ? (P.t / T) * 100 : 0) + "%";
+  const txt = fmt(P.t) + " / " + fmt(T);
+  if (txt !== lastTimeTxt) { lastTimeTxt = txt; $("time").textContent = txt; }
+  ps($("scrubFill"), "transform", `scaleX(${T ? clamp(P.t / T, 0, 1) : 0})`);
   const ph = $("playhead");
   if (ph) {
-    ph.style.left = (LABEL + P.t * state.pps) + "px";
+    ps(ph, "transform", `translateX(${LABEL + P.t * state.pps}px)`);
     if (follow) { const tl = $("timeline"), x = LABEL + P.t * state.pps; if (x > tl.scrollLeft + tl.clientWidth - 40) tl.scrollLeft = x - 120; }
   }
-  const cap = state.captions.find(c => P.t >= c.start && P.t < c.end);
-  $("captionLayer").textContent = cap ? cap.text : "";
-  $("emptyPreview").style.display = state.clips.length ? "none" : "block";
-  updateSelBox();
+  const cap = state.captions.find(c => P.t >= c.start && P.t < c.end), ct = cap ? cap.text : "";
+  if (ct !== lastCap) { lastCap = ct; $("captionLayer").textContent = ct; }
+  ps($("emptyPreview"), "display", state.clips.length ? "none" : "block");
+  if (!P.playing || (++uiTick % 10) === 0) updateSelBox();
 }
 
 /* ---------- Médias ---------- */
 function typeOfPath(p) { return IMG_EXT.test(p) ? "image" : AUD_EXT.test(p) ? "audio" : VID_EXT.test(p) ? "video" : null; }
+// Copie légère (540p, images clés fréquentes) pour une lecture fluide des vidéos lourdes ; l'export utilise toujours l'original
+function ensureProxy(m) {
+  if (m.type !== "video" || m.proxy || m.proxyTried || Math.max(m.width || 0, m.height || 0) <= 960) return;
+  m.proxyTried = true;
+  setStatus(`Optimisation de la lecture de « ${m.name} »…`);
+  window.ecom.makeProxy(m.path).then(p => {
+    if (!p) return;
+    const apply = () => { m.proxy = p; state.clips.forEach(c => { if (c.mediaId === m.id) c.proxy = p; }); if (!P.playing) syncMedia(true); setStatus("Lecture optimisée"); };
+    if (P.playing) pendingProxy.push(apply); else apply();
+  }).catch(() => {});
+}
 async function importPaths(paths) {
   const out = [];
   for (const p of paths) {
@@ -214,7 +297,7 @@ async function importPaths(paths) {
       const info = await window.ecom.probe(p);
       m = { id: newId(), path: p, name: p.split(/[\\/]/).pop(), type, duration: type === "image" ? 5 : (info.duration || 10), hasAudio: type === "audio" ? true : !!info.hasAudio, width: info.width, height: info.height };
       if (type === "video") m.thumb = await window.ecom.thumb(p, m.duration);
-      state.media.push(m);
+      state.media.push(m); ensureProxy(m);
     }
     out.push(m);
   }
@@ -226,10 +309,32 @@ function mediaHtml(filter) {
   if (!list.length) return `<div class="media-card">Glissez vos fichiers ici<br>ou cliquez sur « Importer »</div>`;
   return list.map(m => {
     const url = fileUrl(m.path);
-    const th = m.type === "image" ? `<img src="${url}">` : m.type === "video" ? `<video src="${url}#t=0.5" preload="metadata" muted></video>` : `<span class="note">♫</span>`;
+    const th = m.type === "image" ? `<img src="${url}">` : m.type === "video" ? (m.thumb ? `<img src="${m.thumb}">` : `<video src="${url}#t=0.5" preload="metadata" muted></video>`) : `<span class="note">♫</span>`;
     const icon = { video: "🎬", image: "🖼", audio: "♫" }[m.type];
-    return `<div class="media-item" draggable="true" data-id="${m.id}"><div class="thumb">${th}</div><div class="minfo"><b>${esc(m.name)}</b><small>${icon} ${m.type === "image" ? "Photo" : fmt(m.duration)}${m.type === "video" && !m.hasAudio ? " • sans son" : ""}</small></div><button class="addbtn" data-add="${m.id}" title="Ajouter à la timeline">＋</button></div>`;
+    return `<div class="media-item" draggable="true" data-id="${m.id}"><div class="thumb">${th}</div><div class="minfo"><b>${esc(m.name)}</b><small>${icon} ${m.type === "image" ? "Photo" : fmt(m.duration)}${m.type === "video" && !m.hasAudio ? " • sans son" : ""}</small></div><button class="addbtn" data-add="${m.id}" title="Ajouter à la timeline">＋</button><button class="delbtn" data-mdel="${m.id}" title="Supprimer ce média du projet"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6"/></svg></button></div>`;
   }).join("");
+}
+function askYesNo(title, msg) {
+  return new Promise(res => {
+    $("cfmTitle").textContent = title; $("cfmMsg").textContent = msg;
+    const m = $("confirmModal"); m.classList.remove("hidden");
+    const kd = e => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); done(false); } else if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); done(true); } };
+    const done = v => { m.classList.add("hidden"); $("cfmYes").onclick = $("cfmNo").onclick = null; document.removeEventListener("keydown", kd, true); res(v); };
+    document.addEventListener("keydown", kd, true);
+    $("cfmYes").onclick = () => done(true); $("cfmNo").onclick = () => done(false);
+  });
+}
+async function deleteMedia(id) {
+  const m = state.media.find(x => x.id === id); if (!m) return;
+  const used = state.clips.filter(c => c.mediaId === m.id || (c.path && c.path === m.path && c.type !== "text" && c.type !== "sticker"));
+  if (used.length) { const ok = await askYesNo("Supprimer le média", "Ce média se trouve dans le montage. Supprimer ?"); if (!ok) return; }
+  pause();
+  state.clips = state.clips.filter(c => used.indexOf(c) < 0);
+  state.media = state.media.filter(x => x !== m);
+  if (used.some(c => c.id === state.selected)) state.selected = null;
+  P.t = clamp(P.t, 0, total());
+  renderMedia(); renderTimeline(); renderProps(); syncMedia(true); updateUI();
+  setStatus("Média supprimé");
 }
 function renderMedia() { const el = $("mediaList"); if (el) el.innerHTML = mediaHtml(mediaFilter === "all" ? null : mediaFilter); }
 
@@ -245,7 +350,7 @@ function addClip(m, kind, track, time, extra) {
     const o = state.clips.find(c => c.kind === kind && c.track === track && start < c.start + c.duration - 1e-6 && start + dur > c.start + 1e-6);
     if (!o) break; start = o.start + o.duration;
   }
-  const c = { id: newId(), mediaId: m.id, kind, track, type: kind === "audio" ? "audio" : m.type, path: m.path, name: m.name, start, inPoint: 0, duration: dur, mediaDur: m.type === "image" ? 0 : dur, scale: 100, x: 0, y: 0, volume: 100, hasAudio: kind === "audio" ? true : !!m.hasAudio, thumb: m.thumb || "", fit: "fit", fx: [], srcW: m.width || 0, srcH: m.height || 0 };
+  const c = { id: newId(), mediaId: m.id, kind, track, type: kind === "audio" ? "audio" : m.type, path: m.path, name: m.name, start, inPoint: 0, duration: dur, mediaDur: m.type === "image" ? 0 : dur, scale: 100, x: 0, y: 0, volume: 100, hasAudio: kind === "audio" ? true : !!m.hasAudio, proxy: m.proxy || "", thumb: m.thumb || "", fit: "fit", fx: [], srcW: m.width || 0, srcH: m.height || 0 };
   if (extra) Object.assign(c, extra);
   state.clips.push(c); state.selected = c.id;
   if (!P.playing) P.t = c.start;
@@ -314,6 +419,20 @@ function splitAt(t) {
 }
 
 /* ---------- Timeline ---------- */
+const ICO = { eye: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg>`, eyeoff: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/><path d="M3 3l18 18"/></svg>`, spk: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 010 7M18.5 5.5a9 9 0 010 13"/></svg>`, spkoff: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M16 9l6 6M22 9l-6 6"/></svg>` };
+function trackBtns(kind, tr) {
+  const hid = kind === "video" && state.trackHidden[tr], mut = kind === "video" ? state.trackMuted[tr] : state.audioMuted[tr];
+  const eye = kind === "video" ? `<button class="tg${hid ? " on" : ""}" data-tg="hide" data-kind="video" data-track="${tr}" title="${hid ? "Afficher la piste" : "Masquer la piste"}">${hid ? ICO.eyeoff : ICO.eye}</button>` : "";
+  const spk = `<button class="tg${mut ? " on" : ""}" data-tg="mute" data-kind="${kind}" data-track="${tr}" title="${mut ? "Activer le son de la piste" : "Couper le son de la piste"}">${mut ? ICO.spkoff : ICO.spk}</button>`;
+  return eye + spk;
+}
+let dragId = null;
+function toggleTrack(kind, tr, what) {
+  const name = (kind === "video" ? "V" : "A") + (tr + 1);
+  if (what === "hide") { state.trackHidden[tr] = !state.trackHidden[tr]; setStatus(state.trackHidden[tr] ? `Piste ${name} masquée` : `Piste ${name} affichée`); }
+  else { const arr = kind === "video" ? state.trackMuted : state.audioMuted; arr[tr] = !arr[tr]; setStatus(arr[tr] ? `Son de la piste ${name} coupé` : `Son de la piste ${name} activé`); }
+  renderTimeline(); syncMedia(true); updateSelBox();
+}
 function renderTimeline() {
   const pps = state.pps, T = Math.max(total() + 20, 60), width = Math.ceil(T * pps);
   const step = pps >= 80 ? 1 : pps >= 40 ? 2 : pps >= 20 ? 5 : 10;
@@ -322,42 +441,77 @@ function renderTimeline() {
   const clipHtml = (kind, track) => state.clips.filter(c => c.kind === kind && c.track === track).map(c => {
     const icon = c.type === "text" ? "T" : c.type === "sticker" ? "☺" : c.type === "image" ? "🖼" : c.kind === "audio" ? "♫" : "🎬";
     const bg = c.type === "text" ? "" : c.type === "sticker" ? `;background-image:url('${fileUrl(c.path)}');background-size:auto 78%;background-repeat:no-repeat;background-position:28px center` : c.type === "image" ? `;background-image:linear-gradient(rgba(8,12,24,.45),rgba(8,12,24,.45)),url('${fileUrl(c.path)}');background-size:auto 100%;background-repeat:repeat-x` : c.thumb ? `;background-image:linear-gradient(rgba(8,12,24,.5),rgba(8,12,24,.5)),url('${c.thumb}');background-size:auto 100%;background-repeat:repeat-x` : "";
-    return `<div class="clip ${c.kind} ${c.type}${c.id === state.selected ? " selected" : ""}" data-id="${c.id}" style="left:${c.start * pps}px;width:${Math.max(8, c.duration * pps)}px${bg}"><i class="h hl"></i>${c.trans && prevAdj(c) ? '<i class="tbadge">⇋</i>' : ""}<span class="cname">${icon} ${esc(c.name)}</span><i class="h hr"></i></div>`;
+    return `<div class="clip ${c.kind} ${c.type}${c.id === state.selected ? " selected" : ""}${c.id === dragId ? " dragging" : ""}" data-id="${c.id}" style="left:${c.start * pps}px;width:${Math.max(8, c.duration * pps)}px${bg}"><i class="h hl"></i>${c.trans && prevAdj(c) ? '<i class="tbadge">⇋</i>' : ""}<span class="cname">${icon} ${esc(c.name)}</span><i class="h hr"></i></div>`;
   }).join("");
   let h = `<div class="tl-inner" style="width:${LABEL + width}px"><div class="ruler-row"><div class="tlabel corner"></div><div class="ruler" id="ruler" style="width:${width}px">${ticks}</div></div>`;
-  for (let v = 2; v >= 0; v--) h += `<div class="track-row video"><div class="tlabel">V${v + 1}</div><div class="lane" data-kind="video" data-track="${v}" style="width:${width}px">${clipHtml("video", v)}</div></div>`;
-  for (let a = 0; a < state.audioTracks; a++) h += `<div class="track-row audio"><div class="tlabel">A${a + 1}</div><div class="lane" data-kind="audio" data-track="${a}" style="width:${width}px">${clipHtml("audio", a)}</div></div>`;
+  for (let v = 2; v >= 0; v--) h += `<div class="track-row video${state.trackHidden[v] ? " hid" : ""}${state.trackMuted[v] ? " mut" : ""}"><div class="tlabel"><span class="tn">V${v + 1}</span>${trackBtns("video", v)}</div><div class="lane" data-kind="video" data-track="${v}" style="width:${width}px">${clipHtml("video", v)}</div></div>`;
+  for (let a = 0; a < state.audioTracks; a++) h += `<div class="track-row audio${state.audioMuted[a] ? " mut" : ""}"><div class="tlabel"><span class="tn">A${a + 1}</span>${trackBtns("audio", a)}</div><div class="lane" data-kind="audio" data-track="${a}" style="width:${width}px">${clipHtml("audio", a)}</div></div>`;
   if (state.audioTracks < 3) h += `<div class="track-row audio"><div class="tlabel">＋</div><div class="lane newlane" data-kind="audio" data-new="1" style="width:${width}px">Déposez un son ici pour créer la piste audio ${state.audioTracks + 1}</div></div>`;
   h += `<div class="playhead" id="playhead"></div></div>`;
   $("timeline").innerHTML = h;
   updateUI();
 }
 
+// Aimantation : bords des autres clips, début du projet et tête de lecture
+function snapTime(clip, ns, dur) {
+  const th = 9 / state.pps, cands = [0, P.t];
+  state.clips.forEach(c => { if (c !== clip && c.kind === clip.kind) cands.push(c.start, c.start + c.duration); });
+  let best = ns, bd = th;
+  cands.forEach(cd => {
+    const d1 = Math.abs(ns - cd); if (d1 < bd) { bd = d1; best = cd; }
+    const d2 = Math.abs(ns + dur - cd); if (d2 < bd) { bd = d2; best = cd - dur; }
+  });
+  return Math.max(0, best);
+}
+// Dépose sur un clip existant : insertion avant/après (les clips suivants sont décalés), comme dans CapCut
+function resolveOverlap(clip) {
+  const others = state.clips.filter(c => c !== clip && c.kind === clip.kind && c.track === clip.track).sort((a, b) => a.start - b.start);
+  const hits = others.filter(c => clip.start < c.start + c.duration - 1e-6 && clip.start + clip.duration > c.start + 1e-6);
+  if (!hits.length) return;
+  const X = hits.reduce((m, c) => { const ov = Math.min(clip.start + clip.duration, c.start + c.duration) - Math.max(clip.start, c.start); return ov > m.ov ? { c, ov } : m; }, { c: hits[0], ov: -1 }).c;
+  const before = clip.start + clip.duration / 2 < X.start + X.duration / 2;
+  clip.start = before ? X.start : X.start + X.duration;
+  let edge = clip.start + clip.duration;
+  others.forEach(c => { if (c.start >= (before ? X.start : X.start + X.duration) - 1e-6 && c.start < edge - 1e-6) { c.start = edge; } if (c.start >= clip.start - 1e-6) edge = Math.max(edge, c.start + c.duration); });
+}
 function startDrag(e, clip, mode) {
   e.preventDefault();
-  const x0 = e.clientX, o = { start: clip.start, inPoint: clip.inPoint, duration: clip.duration };
-  let moved = false;
+  const x0 = e.clientX, y0 = e.clientY, o = { start: clip.start, inPoint: clip.inPoint, duration: clip.duration };
+  let moved = false, el = null;
   const mm = ev => {
-    const dx = (ev.clientX - x0) / state.pps; moved = true;
+    if (!moved) {
+      if (Math.hypot(ev.clientX - x0, ev.clientY - y0) < 4) return;
+      moved = true; if (P.playing) pause();
+      dragId = clip.id; el = document.querySelector(`.clip[data-id="${clip.id}"]`); if (el) el.classList.add("dragging");
+      document.body.classList.add("dragging-clip");
+    }
+    const dx = (ev.clientX - x0) / state.pps, pps = state.pps;
     if (mode === "move") {
-      const ns = Math.max(0, o.start + dx); let track = clip.track;
+      const ns = snapTime(clip, Math.max(0, o.start + dx), clip.duration); let track = clip.track;
       const lane = document.elementsFromPoint(ev.clientX, ev.clientY).find(x => x.classList && x.classList.contains("lane") && x.dataset.kind === clip.kind && !x.dataset.new);
       if (lane) track = +lane.dataset.track;
-      if (!overlaps(clip, track, ns)) { clip.start = ns; clip.track = track; }
+      clip.start = ns;
+      if (track !== clip.track) { clip.track = track; const ln = document.querySelector(`.lane[data-kind="${clip.kind}"][data-track="${track}"]`); if (ln && el) ln.appendChild(el); }
+      if (el) el.style.left = clip.start * pps + "px";
     } else if (mode === "right") {
       let nd = Math.max(0.2, o.duration + dx);
       if (!isStill(clip)) nd = Math.min(nd, clip.mediaDur - clip.inPoint);
       if (!overlaps(clip, clip.track, clip.start, nd)) clip.duration = nd;
+      if (el) el.style.width = Math.max(8, clip.duration * pps) + "px";
     } else {
       let d = Math.max(dx, isStill(clip) ? -o.start : -Math.min(o.start, o.inPoint));
       d = Math.min(d, o.duration - 0.2);
       if (!overlaps(clip, clip.track, o.start + d, o.duration - d)) {
         clip.start = o.start + d; clip.duration = o.duration - d; if (!isStill(clip)) clip.inPoint = o.inPoint + d;
       }
+      if (el) { el.style.left = clip.start * pps + "px"; el.style.width = Math.max(8, clip.duration * pps) + "px"; }
     }
-    renderTimeline(); syncMedia(true);
   };
-  const mu = () => { window.removeEventListener("mousemove", mm); window.removeEventListener("mouseup", mu); if (moved) { renderProps(); updateUI(); } };
+  const mu = () => {
+    window.removeEventListener("mousemove", mm); window.removeEventListener("mouseup", mu);
+    document.body.classList.remove("dragging-clip");
+    if (moved) { if (mode === "move") resolveOverlap(clip); dragId = null; renderTimeline(); renderProps(); syncMedia(true); updateUI(); }
+  };
   window.addEventListener("mousemove", mm); window.addEventListener("mouseup", mu);
 }
 
@@ -368,6 +522,8 @@ function scrubFromEvent(e) {
 function initTimeline() {
   const tl = $("timeline");
   tl.addEventListener("mousedown", e => {
+    const tgb = e.target.closest(".tg");
+    if (tgb) { e.preventDefault(); toggleTrack(tgb.dataset.kind, +tgb.dataset.track, tgb.dataset.tg); return; }
     const ruler = e.target.closest("#ruler");
     if (ruler) {
       pause(); scrubFromEvent(e);
@@ -676,6 +832,7 @@ function audioSources(filter) {
     if (!isAudio && !c.hasAudio) return;
     if (filter === "video" && isAudio) return;
     if (/^a\d$/.test(filter) && !(isAudio && c.track === +filter[1])) return;
+    if (isAudio ? state.audioMuted[c.track] : state.trackMuted[c.track]) return;
     out.push({ path: c.path, start: c.start, inPoint: c.inPoint, duration: c.duration, volume: c.volume });
   });
   return out;
@@ -732,8 +889,10 @@ async function openProject() {
   if (!d || !d.state) return setStatus("Projet illisible ou annulé.");
   pause(); state = { ...freshState(), ...d.state, selected: null };
   state.ratio = RATIOS[state.ratio] ? state.ratio : "16:9";
-  (state.clips || []).forEach(c => { if (c.type === "sticker" && c.stickerId) c.path = stickerPath(c.stickerId); c.fx = c.fx || []; if (c.type === "text" && !c.ts) c.ts = Object.assign({}, EcomText.BASE); c.scale = c.scale || 100; c.x = c.x || 0; c.y = c.y || 0; c.volume = c.volume == null ? 100 : c.volume; });
-  P.t = 0; $("zoom").value = state.pps; applyRatio(); showPanel(currentPanel); renderTimeline(); syncMedia(true); updateUI(); setStatus("Projet chargé");
+  (state.media || []).forEach(m => { m.proxy = ""; m.proxyTried = false; });
+  (state.clips || []).forEach(c => { c.proxy = ""; if (c.type === "sticker" && c.stickerId) c.path = stickerPath(c.stickerId); c.fx = c.fx || []; if (c.type === "text" && !c.ts) c.ts = Object.assign({}, EcomText.BASE); c.scale = c.scale || 100; c.x = c.x || 0; c.y = c.y || 0; c.volume = c.volume == null ? 100 : c.volume; });
+  state.trackHidden = state.trackHidden || [false, false, false]; state.trackMuted = state.trackMuted || [false, false, false]; state.audioMuted = state.audioMuted || [false, false, false];
+  P.t = 0; $("zoom").value = state.pps; applyRatio(); showPanel(currentPanel); renderTimeline(); (state.media || []).forEach(ensureProxy); syncMedia(true); updateUI(); setStatus("Projet chargé");
 }
 function newProject() {
   if (state.clips.length && !confirm(EcomI18n.t("Créer un nouveau projet ? Les modifications non enregistrées seront perdues."))) return;
@@ -748,7 +907,7 @@ function openExport() {
 async function doExport() {
   const out = await window.ecom.pickExportPath("EcomVideoStudio-export.mp4"); if (!out) return;
   const T = total();
-  const video = state.clips.filter(c => c.kind === "video").map(c => ({ path: c.path, type: c.type, track: c.track, start: c.start, inPoint: c.inPoint, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fit: c.fit, anim: c.anim, fx: c.fx || [], srcW: c.srcW || 0, srcH: c.srcH || 0, trans: c.trans || null, env: c.env, img: c.type === "text" ? c.img : undefined }));
+  const video = state.clips.filter(c => c.kind === "video" && !state.trackHidden[c.track]).map(c => ({ path: c.path, type: c.type, track: c.track, start: c.start, inPoint: c.inPoint, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fit: c.fit, anim: c.anim, fx: c.fx || [], srcW: c.srcW || 0, srcH: c.srcH || 0, trans: c.trans || null, env: c.env, img: c.type === "text" ? c.img : undefined }));
   $("doExport").disabled = true; $("exportLog").textContent = "Export en cours…\n"; $("expBar").classList.remove("hidden");
   const r = await window.ecom.exportVideo({ video, audio: audioSources("all"), total: T, resolution, ratio: state.ratio, output: out, captions: $("burnCaps").checked ? state.captions : [] });
   $("doExport").disabled = false;
@@ -781,6 +940,7 @@ pc.addEventListener("dragstart", e => { const tx = e.target.closest(".txt"); if 
 pc.addEventListener("mouseover", e => { const card = e.target.closest(".tr"); if (card && (!demo || demo.card !== card)) startDemo(card); });
 pc.addEventListener("mouseout", e => { if (demo && !demo.card.contains(e.relatedTarget)) stopDemo(); });
 pc.addEventListener("click", e => {
+  const md = e.target.closest("[data-mdel]"); if (md) { e.stopPropagation(); deleteMedia(md.dataset.mdel); return; }
   const mf = e.target.closest("[data-mf]"); if (mf) { mediaFilter = mf.dataset.mf; showPanel("media"); return; }
   const tc = e.target.closest("[data-trcat]"); if (tc) { trCat = tc.dataset.trcat; showPanel("transitions"); return; }
   const tre = e.target.closest(".tr"); if (tre) { applyTransition(tre.dataset.tr); return; }
@@ -798,6 +958,7 @@ window.addEventListener("dragover", e => e.preventDefault());
 window.addEventListener("drop", e => e.preventDefault());
 document.addEventListener("mouseup", () => { const a = document.activeElement; if (a && a.type === "range") a.blur(); });
 window.addEventListener("keydown", e => {
+  if (!$("confirmModal").classList.contains("hidden")) return;
   if (/INPUT|SELECT|TEXTAREA/.test(e.target.tagName) && e.target.type !== "range") return;
   if (e.code === "ArrowLeft" || e.code === "ArrowRight") {
     e.preventDefault();

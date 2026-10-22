@@ -1,5 +1,5 @@
 const { app, BrowserWindow, ipcMain, dialog, safeStorage } = require("electron");
-const path = require("path"), fs = require("fs"), os = require("os");
+const path = require("path"), fs = require("fs"), os = require("os"), crypto = require("crypto");
 const { spawn } = require("child_process");
 const ffmpegPath = require("ffmpeg-static").replace("app.asar", "app.asar.unpacked");
 const { buildExportArgs, buildTranscribeArgs, buildAss, resolutionFor } = require("./ffgraph");
@@ -9,7 +9,7 @@ function createWindow() {
   win = new BrowserWindow({
     width: 1500, height: 930, minWidth: 1100, minHeight: 700, backgroundColor: "#090b10",
     icon: path.join(__dirname, "icon.png"),
-    webPreferences: { preload: path.join(__dirname, "preload.js"), contextIsolation: true, nodeIntegration: false },
+    webPreferences: { preload: path.join(__dirname, "preload.js"), contextIsolation: true, nodeIntegration: false, backgroundThrottling: false },
     title: "EcomVideoStudio"
   });
   win.setMenuBarVisibility(false);
@@ -57,6 +57,21 @@ ipcMain.handle("open-media", async () => {
   return r.canceled ? [] : r.filePaths;
 });
 ipcMain.handle("probe", (_, f) => probe(f));
+// Proxys d'aperçu (540p, image clé toutes les 15 images) : lecture fluide et déplacement instantané dans les vidéos lourdes
+let proxyChain = Promise.resolve();
+async function makeProxy(file) {
+  const st = fs.statSync(file);
+  const h = crypto.createHash("sha1").update(file + "|" + st.size + "|" + st.mtimeMs).digest("hex").slice(0, 16);
+  const dir = path.join(app.getPath("userData"), "proxies"), out = path.join(dir, h + ".mp4");
+  if (fs.existsSync(out) && fs.statSync(out).size > 1000) return out;
+  fs.mkdirSync(dir, { recursive: true });
+  const tmp = path.join(dir, h + ".part.mp4");
+  const r = await runFF(["-y", "-hide_banner", "-i", file, "-vf", "scale=w='if(gt(iw,ih),-2,540)':h='if(gt(iw,ih),540,-2)'", "-c:v", "libx264", "-preset", "veryfast", "-crf", "27",
+    "-g", "15", "-keyint_min", "15", "-sc_threshold", "0", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", tmp]);
+  if (r.code !== 0) { try { fs.unlinkSync(tmp); } catch (e) {} return ""; }
+  fs.renameSync(tmp, out); return out;
+}
+ipcMain.handle("make-proxy", (_, file) => { proxyChain = proxyChain.then(() => makeProxy(file)).catch(() => ""); return proxyChain; });
 ipcMain.handle("sticker-dir", () => path.join(__dirname, "stickers"));
 ipcMain.handle("fx-dir", () => path.join(__dirname, "effects"));
 ipcMain.handle("thumb", (_, file, dur) => new Promise(resolve => {

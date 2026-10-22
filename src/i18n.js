@@ -97,6 +97,11 @@
     "Aucun son à transcrire : ajoutez une voix off ou une vidéo avec du son sur la timeline.": "No sound to transcribe: add a voice-over or a video with sound to the timeline.",
     "Enregistrez d'abord votre clé API pour cette plateforme (voir ci-dessus).": "First save your API key for this provider (see above).",
     "Remplacer les légendes existantes ?": "Replace the existing captions?", "Supprimer": "Delete",
+    /* --- pistes, suppression de médias, lecture --- */
+    "Afficher la piste": "Show track", "Masquer la piste": "Hide track", "Activer le son de la piste": "Unmute track", "Couper le son de la piste": "Mute track",
+    "Piste {0} masquée": "Track {0} hidden", "Piste {0} affichée": "Track {0} shown", "Son de la piste {0} coupé": "Track {0} muted", "Son de la piste {0} activé": "Track {0} unmuted",
+    "Supprimer ce média du projet": "Delete this media from the project", "Supprimer le média": "Delete media", "Ce média se trouve dans le montage. Supprimer ?": "This media is used in the edit. Delete it?",
+    "Oui": "Yes", "Non": "No", "Média supprimé": "Media deleted", "Optimisation de la lecture de « {0} »…": "Optimizing playback of “{0}”…", "Lecture optimisée": "Playback optimized",
     /* --- projets --- */
     "Projet enregistré : {0}": "Project saved: {0}", "Projet chargé": "Project loaded", "Projet illisible ou annulé.": "Project unreadable or cancelled.",
     "Créer un nouveau projet ? Les modifications non enregistrées seront perdues.": "Create a new project? Unsaved changes will be lost."

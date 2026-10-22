@@ -170,3 +170,17 @@ button:disabled{opacity:.5;cursor:default}
 .row .two{display:flex;gap:8px;align-items:center}.row input[type=color]{width:42px;height:28px;padding:0;border:1px solid #303746;border-radius:5px;background:#0b0e14;cursor:pointer}
 .row .chk2{display:flex;align-items:center;gap:7px;font-size:11px;color:#c3c9d6;justify-content:flex-start}
 .seg button{min-width:0}
+
+.tlabel{width:96px;gap:4px;justify-content:flex-start;padding-left:7px}
+.tlabel .tn{min-width:18px;text-align:left}
+.tg{padding:3px 4px;border-radius:6px;background:#161c28;border:1px solid #2a3142;color:#b8c0d2;display:inline-flex;align-items:center;cursor:pointer}
+.tg:hover{background:#222b3d;color:#fff}.tg.on{background:#3b1d28;border-color:#8a2b45;color:#ff7d9d}
+.track-row.hid .lane{opacity:.4}.track-row.mut .lane{background-image:repeating-linear-gradient(135deg,transparent 0 8px,#ffffff08 8px 16px)}
+.playhead{left:0!important;will-change:transform}
+#scrubFill{width:100%!important;transform-origin:0 50%;will-change:transform}
+.clip.dragging{opacity:.8;z-index:20;box-shadow:0 6px 18px #000a;cursor:grabbing}
+body.dragging-clip,body.dragging-clip *{cursor:grabbing!important}
+.media-item{position:relative}
+.delbtn{padding:5px 7px;display:inline-flex;align-items:center;color:#ff7d9d;border-color:#4a2230;background:#1d1219}
+.delbtn:hover{background:#3b1d28;color:#fff}
+#frame{contain:layout paint}.layer{will-change:transform}

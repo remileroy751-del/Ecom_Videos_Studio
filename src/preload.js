@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer, webUtils } = require("electron");
 contextBridge.exposeInMainWorld("ecom", {
   openMedia: () => ipcRenderer.invoke("open-media"),
   probe: f => ipcRenderer.invoke("probe", f),
+  makeProxy: f => ipcRenderer.invoke("make-proxy", f),
   thumb: (f, d) => ipcRenderer.invoke("thumb", f, d),
   getStickerDir: () => ipcRenderer.invoke("sticker-dir"),
   getLang: () => ipcRenderer.invoke("get-lang"),
