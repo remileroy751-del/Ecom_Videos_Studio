@@ -1,5 +1,12 @@
-# EcomVideoStudio — v1.5.0
+# EcomVideoStudio — v1.6.0
 Logiciel desktop de montage vidéo pour Windows 10+ (Electron + FFmpeg).
+
+## Nouveautés v1.6.0 / What's new
+- **Réglages de l'image** (panneau de droite, pour une vidéo ou une photo) : contraste, luminosité, netteté, saturation — visibles en direct et appliqués à l'export.
+- **Légendes automatiques ajoutées au projet** : après « Générer les légendes », chaque légende devient un clip texte sur la nouvelle piste **CC** de la timeline (comme CapCut). Cliquez sur une légende pour modifier son texte, son style, sa position ou ses bords ; un bouton applique son style à toutes les légendes.
+- **8 styles de légendes** à choisir **avant** de générer (police, couleur, contour, ombre, fond) + position (bas / milieu / haut).
+- **Textes** : la taille ne dépend plus de la longueur du texte (changer le texte ne le rétrécit plus). La piste CC accueille les textes, légendes et stickers.
+- Export rapide même avec des centaines de légendes.
 
 ## Nouveautés v1.5.0 / What's new
 - **Pistes V1, V2, V3** : bouton **œil** (masquer / afficher la piste) et bouton **haut-parleur** (couper / activer le son). Les pistes audio A1 à A3 ont aussi leur haut-parleur. Une piste masquée ou muette est aussi ignorée à l'export.

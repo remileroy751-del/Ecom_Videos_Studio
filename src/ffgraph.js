@@ -58,6 +58,26 @@ function prepareClips(o) {
   return out;
 }
 
+// Textes simples (sans animation) d'une même piste, non chevauchants : fusionnés en UN seul flux (export rapide avec des centaines de légendes)
+function groupSimpleText(list, W, H) {
+  const byTrack = {};
+  list.forEach(c => {
+    if (c.type !== 'text' || c.ghost || (c.anim && c.anim !== 'none') || c.env !== false || c.noAnim) return;
+    const k = Math.min(3, Math.max(0.05, (c.scale == null ? 100 : c.scale) / 100)) * Math.min(W, H) / 1080;
+    const tw = fxlib.even((c.srcW || 100) * k), th = fxlib.even((c.srcH || 40) * k);
+    if (tw > W || th > H) return;
+    (byTrack[c.track] = byTrack[c.track] || []).push({ c, tw, th });
+  });
+  const groups = [];
+  Object.keys(byTrack).forEach(t => {
+    const arr = byTrack[t].sort((a, b) => a.c.start - b.c.start), seq = [];
+    let cursor = -1;
+    arr.forEach(it => { if (it.c.start >= cursor - 1e-3) { seq.push(it); cursor = it.c.start + it.c.duration; } });
+    if (seq.length >= 6) groups.push(seq);
+  });
+  return groups;
+}
+
 // Couche animée d'une transition (fantôme "g" ou clip entrant "b") : renvoie { label, ox, oy }
 function transLayer(fc, label, T, side, d, g, tag) {
   const L = T[side] || {};
@@ -108,7 +128,26 @@ function buildExportArgs(o, res, burn, output) {
     last = n;
   };
   let pendingGhost = null;
-  prepareClips(o).forEach((c, i) => {
+  const prepared = prepareClips(o), groups = groupSimpleText(prepared, W, H), inGroup = new Map();
+  groups.forEach(g => g.forEach((it, k) => inGroup.set(it.c, { g, first: k === 0 })));
+  const items = [];
+  prepared.forEach(c => { const m = inGroup.get(c); if (!m) items.push({ c }); else if (m.first) items.push({ group: m.g }); });
+  items.forEach((item, i) => {
+    if (item.group) {
+      const seq = item.group; let cursor = 0; const labels = [];
+      seq.forEach((it, k) => {
+        const c = it.c, gap = c.start - cursor, n = Math.max(1, Math.round(c.duration * FPS));
+        if (gap > 0.5 / FPS) { fc.push(`color=c=black:s=${W}x${H}:r=${FPS},format=rgba,colorchannelmixer=aa=0,trim=end_frame=${Math.round(gap * FPS)},setpts=N/(${FPS}*TB)[tg${i}g${k}]`); labels.push(`[tg${i}g${k}]`); }
+        const myIdx = idx++; args.push('-i', c.path);
+        const px = Math.max(0, Math.min(W - it.tw, Math.round(W / 2 + (c.x || 0) / 100 * W - it.tw / 2))), py = Math.max(0, Math.min(H - it.th, Math.round(H / 2 + (c.y || 0) / 100 * H - it.th / 2)));
+        fc.push(`[${myIdx}:v]format=rgba,scale=${it.tw}:${it.th},setsar=1,pad=${W}:${H}:${px}:${py}:color=0x00000000,loop=loop=${n - 1}:size=1:start=0,setpts=N/(${FPS}*TB),fps=${FPS}[tg${i}c${k}]`);
+        labels.push(`[tg${i}c${k}]`); cursor = c.start + n / FPS;
+      });
+      fc.push(`${labels.join('')}concat=n=${labels.length}:v=1:a=0,setpts=PTS-STARTPTS[tgs${i}]`);
+      overlayLine(`tgs${i}`, '0', '0', seq[0].c.start, cursor);
+      return;
+    }
+    const c = item.c;
     const ghost = !!c.ghost, still = isStill(c.type), ovAnim = c.type === 'sticker' || c.type === 'text';
     const myIdx = idx++;
     if (still) args.push('-loop', '1', '-framerate', String(FPS), '-t', num(c.duration), '-i', c.path);
@@ -129,11 +168,14 @@ function buildExportArgs(o, res, burn, output) {
       if (c.fit === 'fill') { cw = bw; ch = bh; }
       else if (c.srcW && c.srcH) { const k = Math.min(bw / c.srcW, bh / c.srcH); cw = fxlib.even(c.srcW * k); ch = fxlib.even(c.srcH * k); }
     }
-    if (c.fit === 'fill' && !ovAnim) chain += `scale=${bw}:${bh}:force_original_aspect_ratio=increase,crop=${bw}:${bh},setsar=1`;
+    if (c.type === 'text') { // texte : taille naturelle (la taille se règle avec « scale », indépendante de la longueur du texte)
+      const k = Math.max(0.05, Math.min(3, (c.scale == null ? 100 : c.scale) / 100)) * Math.min(W, H) / 1080;
+      chain += `scale=${fxlib.even((c.srcW || 100) * k)}:${fxlib.even((c.srcH || 40) * k)},setsar=1`;
+    } else if (c.fit === 'fill' && !ovAnim) chain += `scale=${bw}:${bh}:force_original_aspect_ratio=increase,crop=${bw}:${bh},setsar=1`;
     else if (cw) chain += `scale=${cw}:${ch},setsar=1`;
     else chain += `scale=${bw}:${bh}:force_original_aspect_ratio=decrease,setsar=1`;
     if (!ovAnim && !c.noFx) {
-      const parts = fxlib.ffChain(c.fx, bw, bh, cw, ch, c.duration, { noGeo: ghost });
+      const parts = fxlib.ffChain(c.fx, bw, bh, cw, ch, c.duration, { noGeo: ghost, adj: c.adj });
       if (parts.length) chain += ',' + parts.join(',');
     }
     if (ovAnim && !c.noAnim) {
@@ -198,7 +240,9 @@ function buildExportArgs(o, res, burn, output) {
   else fc.push(`[${last}]format=yuv420p[vout]`);
   const ag = audioGraph(o.audio, total, idx, args);
   if (ag) fc.push(...ag.filters);
-  args.push('-filter_complex', fc.join(';'), '-map', '[vout]');
+  const graph = fc.join(';');
+  if (graph.length > 12000 && o.writeGraph) args.push(o.graphFlag || '-filter_complex_script', o.writeGraph(graph), '-map', '[vout]'); // graphe long : fichier (limite de longueur de commande Windows)
+  else args.push('-filter_complex', graph, '-map', '[vout]');
   if (ag) args.push('-map', `[${ag.label}]`, '-c:a', 'aac', '-b:a', '192k');
   args.push('-c:v', 'libx264', '-preset', 'medium', '-crf', CRF[o.resolution] || '20',
     '-pix_fmt', 'yuv420p', '-r', String(FPS), '-movflags', '+faststart', '-t', num(total), output);

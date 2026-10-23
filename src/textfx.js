@@ -31,11 +31,23 @@
     P("violet", "Dégradé violet", "Purple gradient", "Votre texte", { font: "Verdana", grad: true, color: "#d9c2ff", color2: "#6a5cff", strokeW: 5, strokeColor: "#1b0b3a" })
   ];
   const BY = {}; PRESETS.forEach(p => { BY[p.id] = p; });
+  // 8 styles proposés pour les légendes automatiques (police, couleur, contour, ombre, fond)
+  const CAPTION_STYLES = [
+    P("classic", "Classique", "Classic", "Légende", { strokeW: 6 }),
+    P("yellow", "Jaune sous-titre", "Yellow subtitle", "Légende", { font: "Impact", bold: false, color: "#ffe600", strokeW: 8 }),
+    P("box", "Boîte noire", "Black box", "Légende", { bg: true, bgColor: "#000000", bgOpacity: 78, bgRadius: 14 }),
+    P("neon", "Néon bleu", "Blue neon", "Légende", { font: "Arial Black", color: "#d6faff", fx: "glow", fxColor: "#00e5ff", fxAmount: 60 }),
+    P("soft", "Ombre douce", "Soft shadow", "Légende", { font: "Segoe UI", fx: "shadow", fxColor: "#000000", fxAmount: 60 }),
+    P("red", "Boîte rouge", "Red box", "Légende", { font: "Arial Black", bg: true, bgColor: "#e50914", bgOpacity: 100, bgRadius: 12 }),
+    P("comic", "BD bleue", "Comic blue", "Légende", { font: "Comic Sans MS", color: "#ffffff", strokeW: 8, strokeColor: "#1b4cff", fx: "hard", fxColor: "#000000", fxAmount: 50 }),
+    P("gold", "Doré", "Golden", "Légende", { font: "Georgia", italic: true, grad: true, color: "#fff1b8", color2: "#d4a017", fx: "shadow", fxColor: "#000000", fxAmount: 50 })
+  ];
+  const CAPTION_BY = {}; CAPTION_STYLES.forEach(p => { CAPTION_BY[p.id] = p; });
 
   // Dessine le texte et renvoie { url, w, h } (PNG transparent)
   function render(text, ts, ref) {
     ts = Object.assign({}, BASE, ts || {});
-    const FS = ref || 120, lh = FS * 1.2, up = ts.upper ? String(text).toUpperCase() : String(text);
+    const FS = ref || 140, lh = FS * 1.2, up = ts.upper ? String(text).toUpperCase() : String(text);
     const lines = up.split("\n"); if (!lines.length) lines.push("");
     const font = `${ts.italic ? "italic " : ""}${ts.bold ? "bold " : ""}${FS}px ${FONT_CSS[ts.font] || ts.font}`;
     const meas = document.createElement("canvas").getContext("2d");
@@ -79,6 +91,6 @@
     });
     return { url: cv.toDataURL("image/png"), w: cv.width, h: cv.height };
   }
-  const api = { FONTS, PRESETS, BY, BASE, render };
+  const api = { FONTS, PRESETS, BY, CAPTION_STYLES, CAPTION_BY, BASE, render };
   if (typeof module !== "undefined" && module.exports) module.exports = api; else root.EcomText = api;
 })(typeof window !== "undefined" ? window : this);

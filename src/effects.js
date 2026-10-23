@@ -54,6 +54,23 @@
   const BY = {}; L.forEach(e => { BY[e.id] = e; });
   const CATS = { all: "Tous", color: "Couleur", film: "Film", move: "Mouvement", ambient: "Ambiance" };
 
+  // Réglages d'image du clip : valeurs de -100 à 100 (netteté : 0 à 100)
+  function adjVals(a) { a = a || {}; return { F: 1 + (a.brightness || 0) / 100 * 0.5, C: 1 + (a.contrast || 0) / 100 * 0.6, S: 1 + (a.saturation || 0) / 100, sh: a.sharp || 0 }; }
+  function adjCss(a) {
+    const v = adjVals(a), p = [];
+    if (v.F !== 1) p.push(`brightness(${v.F.toFixed(3)})`);
+    if (v.C !== 1) p.push(`contrast(${v.C.toFixed(3)})`);
+    if (v.S !== 1) p.push(`saturate(${v.S.toFixed(3)})`);
+    if (v.sh > 0) p.push(`url(#fxa-sharp${Math.min(20, Math.max(1, Math.round(v.sh / 5)))})`);
+    return p.join(" ");
+  }
+  function adjFf(a) {
+    const v = adjVals(a), p = [];
+    // un seul filtre « eq » (rapide, sans conversion RVB) : luminosité équivalente aux tons moyens du rendu CSS
+    if (v.F !== 1 || v.C !== 1 || v.S !== 1) p.push(`eq=brightness=${(0.5 * (v.F - 1)).toFixed(3)}:contrast=${v.C.toFixed(3)}:saturation=${v.S.toFixed(3)}`);
+    if (v.sh > 0) p.push(`unsharp=5:5:${(v.sh / 100 * 1.5).toFixed(2)}:5:5:0`);
+    return p;
+  }
   const mixCss = m => `${m[0]} ${m[1]} ${m[2]} 0 0 ${m[3]} ${m[4]} ${m[5]} 0 0 ${m[6]} ${m[7]} ${m[8]} 0 0 0 0 0 1 0`;
   const mixFf = m => `colorchannelmixer=rr=${m[0]}:rg=${m[1]}:rb=${m[2]}:gr=${m[3]}:gg=${m[4]}:gb=${m[5]}:br=${m[6]}:bg=${m[7]}:bb=${m[8]}`;
   const zoomF = t => 1 + 0.06 * (1 + Math.sin(2 * Math.PI * 1.2 * t)) / 2;
@@ -68,14 +85,15 @@
   function svgDefs() {
     let s = "";
     L.forEach(e => { if (e.mix) s += `<filter id="fxm-${e.id}" color-interpolation-filters="sRGB"><feColorMatrix type="matrix" values="${mixCss(e.mix)}"/></filter>`; });
+    for (let n = 1; n <= 20; n++) { const a = (n / 20 * 0.7).toFixed(3), c = (1 + 4 * a).toFixed(3); s += `<filter id="fxa-sharp${n}" color-interpolation-filters="sRGB"><feConvolveMatrix order="3" kernelMatrix="0 -${a} 0 -${a} ${c} -${a} 0 -${a} 0" preserveAlpha="true"/></filter>`; }
     Object.keys(SVG_SPECIAL).forEach(k => { s += `<filter id="fxs-${k}" color-interpolation-filters="sRGB" x="0" y="0" width="100%" height="100%">${SVG_SPECIAL[k]}</filter>`; });
     return s;
   }
 
   // Aperçu : états CSS pour une liste d'effets à l'instant local tl (durée D)
-  function preview(ids, tl, D) {
+  function preview(ids, tl, D, adj) {
     const r = { css: "", vig: false, bars: false, overlays: [], tf: "", opacity: 1 };
-    const css = [];
+    const css = [adjCss(adj)];
     (ids || []).forEach(id => {
       const e = BY[id]; if (!e) return;
       if (e.css) css.push(e.css);
@@ -89,14 +107,14 @@
       if (e.geo === "zoom") r.tf += `scale(${zoomF(tl).toFixed(4)}) `;
       if (e.fade) r.opacity = Math.max(0, Math.min(1, tl / 0.5, (D - tl) / 0.5));
     });
-    r.css = css.join(" ");
+    r.css = css.filter(Boolean).join(" ");
     return r;
   }
 
   // Export : chaîne de filtres FFmpeg (couleur puis géométrie puis fondu) pour un clip.
   // box = [bw, bh] ; cw/ch = taille du contenu (peut être null) ; D = durée.
   function ffChain(ids, bw, bh, cw, ch, D, opts) {
-    const parts = [];
+    const parts = adjFf(opts && opts.adj);
     (ids || []).forEach(id => {
       const e = BY[id]; if (!e || e.overlay || e.geo || e.fade) return;
       if (e.pre) parts.push(e.pre);
@@ -118,6 +136,6 @@
   const ffFade = (ids, D) => (ids || []).some(id => BY[id] && BY[id].fade) ? `format=rgba,fade=t=in:st=0:d=0.5:alpha=1,fade=t=out:st=${Math.max(0, D - 0.5).toFixed(3)}:d=0.5:alpha=1` : "";
   const overlaysOf = ids => (ids || []).filter(id => BY[id] && BY[id].overlay);
 
-  const api = { LIST: L, BY, CATS, svgDefs, preview, ffChain, ffFade, overlaysOf, mixSepia, even };
+  const api = { adjCss, adjFf, LIST: L, BY, CATS, svgDefs, preview, ffChain, ffFade, overlaysOf, mixSepia, even };
   if (typeof module !== "undefined" && module.exports) module.exports = api; else root.EcomFX = api;
 })(typeof window !== "undefined" ? window : this);

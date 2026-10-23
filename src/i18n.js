@@ -102,6 +102,19 @@
     "Piste {0} masquée": "Track {0} hidden", "Piste {0} affichée": "Track {0} shown", "Son de la piste {0} coupé": "Track {0} muted", "Son de la piste {0} activé": "Track {0} unmuted",
     "Supprimer ce média du projet": "Delete this media from the project", "Supprimer le média": "Delete media", "Ce média se trouve dans le montage. Supprimer ?": "This media is used in the edit. Delete it?",
     "Oui": "Yes", "Non": "No", "Média supprimé": "Media deleted", "Optimisation de la lecture de « {0} »…": "Optimizing playback of “{0}”…", "Lecture optimisée": "Playback optimized",
+    /* --- v1.6 : réglages d'image, légendes en clips --- */
+    "Réglages de l'image": "Image adjustments", "Contraste": "Contrast", "Luminosité": "Brightness", "Netteté": "Sharpen", "Saturation": "Saturation",
+    "Réinitialiser les réglages": "Reset adjustments", "Légende": "Caption", "Appliquer ce style à toutes les légendes": "Apply this style to all captions",
+    "Modifiez le texte ci-dessus ; glissez les bords du clip pour ajuster son début et sa fin.": "Edit the text above; drag the clip edges to adjust its start and end.",
+    "1. Style des légendes": "1. Caption style", "Position": "Position", "En bas": "Bottom", "Au milieu": "Middle", "En haut": "Top",
+    "2. Plateforme de transcription": "2. Transcription provider", "3. Langue et son": "3. Language and sound",
+    "Jaune sous-titre": "Yellow subtitle", "BD bleue": "Comic blue", "Doré": "Golden",
+    "{0} légendes dans le projet (piste CC)": "{0} captions in the project (CC track)", "Appliquer le style choisi aux légendes existantes": "Apply the chosen style to existing captions",
+    "Supprimer toutes les légendes": "Delete all captions", "Légendes supprimées": "Captions deleted",
+    "Les légendes sont ajoutées automatiquement à la piste CC de la timeline. Cliquez sur une légende pour modifier son texte, son style ou sa durée.": "Captions are added automatically to the CC track of the timeline. Click a caption to edit its text, style or duration.",
+    "Création des légendes… {0}/{1}": "Creating captions… {0}/{1}", "{0} légendes ajoutées au projet": "{0} captions added to the project", "Style appliqué à {0} légendes": "Style applied to {0} captions",
+    "✔ Légendes ajoutées à la piste CC. Cliquez sur une légende dans la timeline pour la modifier.": "✔ Captions added to the CC track. Click a caption on the timeline to edit it.",
+    "Cette piste est réservée aux textes et aux légendes.": "This track is reserved for texts and captions.",
     /* --- projets --- */
     "Projet enregistré : {0}": "Project saved: {0}", "Projet chargé": "Project loaded", "Projet illisible ou annulé.": "Project unreadable or cancelled.",
     "Créer un nouveau projet ? Les modifications non enregistrées seront perdues.": "Create a new project? Unsaved changes will be lost."

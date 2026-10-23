@@ -10,7 +10,7 @@ function fileUrl(p) { return encodeURI("file:///" + p.replace(/\\/g, "/")).repla
 function fmt(s, dec) { s = Math.max(0, s || 0); const m = Math.floor(s / 60), r = s - m * 60; return String(m).padStart(2, "0") + ":" + (dec ? r.toFixed(1).padStart(4, "0") : String(Math.floor(r)).padStart(2, "0")); }
 
 let state = freshState();
-function freshState() { return { media: [], clips: [], audioTracks: 1, captions: [], selected: null, resolution: "1080", ratio: "16:9", pps: 40, trackHidden: [false, false, false], trackMuted: [false, false, false], audioMuted: [false, false, false] }; }
+function freshState() { return { media: [], clips: [], audioTracks: 1, captions: [], selected: null, resolution: "1080", ratio: "16:9", pps: 40, trackHidden: [false, false, false, false], trackMuted: [false, false, false, false], audioMuted: [false, false, false], capStyle: "classic", capPos: "bottom" }; }
 const isStill = c => c.type === "image" || c.type === "sticker" || c.type === "text";
 const isOv = c => c.type === "sticker" || c.type === "text";
 let stickerDir = "", fxDir = "", fxCat = "all";
@@ -29,7 +29,7 @@ const clipAt = (kind, track, t) => state.clips.find(c => c.kind === kind && c.tr
 function ps(el, prop, val) { const c = el._c || (el._c = {}); if (c[prop] === val) return; c[prop] = val; el.style[prop] = val; }
 const pv = c => c.proxy || c.path;            // fichier utilisé pour l'aperçu (proxy léger si disponible)
 const layers = [], aEls = [];
-for (let i = 0; i < 3; i++) {
+for (let i = 0; i < 4; i++) {
   const L = { cur: null, gcur: null };
   const mkv = () => { const v = document.createElement("video"); v.playsInline = true; v.preload = "auto"; v.disablePictureInPicture = true; v.addEventListener("loadeddata", () => { if (L.v === v && !P.playing) syncMedia(true); }); return v; };
   const wrap = document.createElement("div"); wrap.className = "layer"; wrap.style.zIndex = i + 1;
@@ -44,10 +44,12 @@ for (let i = 0; i < 3; i++) {
   wrap.append(gh, main); $("layers").appendChild(wrap);
   Object.assign(L, { wrap, main, gh, gv, gi, vs, v: vs[0], img, vig, bars, fxv });
   layers.push(L);
-  const mka = () => { const a = new Audio(); a.preload = "auto"; return a; };
-  const as = [mka(), mka()]; const A = { as, a: as[0], cur: null };
-  as.forEach(a => a.addEventListener("loadeddata", () => { if (A.a === a && !P.playing) syncMedia(true); }));
-  aEls.push(A);
+  if (i < 3) {
+    const mka = () => { const a = new Audio(); a.preload = "auto"; return a; };
+    const as = [mka(), mka()]; const A = { as, a: as[0], cur: null };
+    as.forEach(a => a.addEventListener("loadeddata", () => { if (A.a === a && !P.playing) syncMedia(true); }));
+    aEls.push(A);
+  }
 }
 
 // Lecture d'un élément média calé sur l'horloge du projet (synchronisation douce : pas de saccade)
@@ -91,7 +93,7 @@ function nextClip(kind, track, t, types) {
 }
 // Précharge les prochains clips (vidéo, fantôme de transition, audio) pendant que le clip courant joue
 function preloadAhead(t) {
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 4; i++) {
     const L = layers[i], n = nextClip("video", i, t, ["video"]);
     if (n) {
       const sb = L.vs[0] === L.v ? L.vs[1] : L.vs[0];
@@ -99,7 +101,7 @@ function preloadAhead(t) {
       const A = n.trans ? prevAdj(n) : null;
       if (A && A.type === "video" && L.gcur !== A.id && L.gh.style.display === "none") { setSrc(L.gv, pv(A)); try { L.gv.currentTime = Math.max(0, A.inPoint + A.duration - 0.05); } catch (e) {} L.gcur = A.id; }
     }
-    const na = nextClip("audio", i, t, ["audio"]), Au = aEls[i];
+    const na = i < 3 ? nextClip("audio", i, t, ["audio"]) : null, Au = aEls[i];
     if (na) {
       const sb = Au.as[0] === Au.a ? Au.as[1] : Au.as[0];
       if (sb.dataset.pre !== na.id) { sb.dataset.pre = na.id; setSrc(sb, pv(na)); try { sb.currentTime = na.inPoint; } catch (e) {} }
@@ -109,10 +111,10 @@ function preloadAhead(t) {
 
 function applyFx(L, c, t, force) {
   const tl = clamp(t - c.start, 0, c.duration);
-  const f = isOv(c) ? null : EcomFX.preview(c.fx, tl, c.duration);
+  const f = isOv(c) ? null : EcomFX.preview(c.fx, tl, c.duration, c.adj);
   const css = f ? f.css : "", tf = f ? f.tf : "";
   L.vs.forEach(v => { ps(v, "filter", css); ps(v, "transform", tf); });
-  ps(L.img, "filter", css); ps(L.img, "transform", tf);
+  ps(L.img, "filter", css); if (c.type !== "text") ps(L.img, "transform", tf);
   ps(L.wrap, "opacity", f ? String(f.opacity) : "1");
   ps(L.vig, "display", f && f.vig ? "block" : "none"); ps(L.bars, "display", f && f.bars ? "block" : "none");
   L.fxv.forEach((fv, k) => {
@@ -138,7 +140,7 @@ function applyTrans(L, c, t, force) {
   const sb = EcomTR.layerState(T, "b", p, Fw, Fh), sg = EcomTR.layerState(T, "g", p, Fw, Fh), org = T.td ? "0 0" : "50% 50%";
   const m = L.main; ps(m, "transformOrigin", org); ps(m, "transform", sb.transform); ps(m, "opacity", String(sb.opacity)); ps(m, "clipPath", sb.clip); ps(m, "visibility", sb.visible ? "visible" : "hidden"); ps(m, "zIndex", String(sb.z));
   const g = L.gh; ps(g, "display", "block"); ps(g, "transformOrigin", org); ps(g, "transform", sg.transform); ps(g, "opacity", String(sg.opacity)); ps(g, "visibility", sg.visible ? "visible" : "hidden"); ps(g, "zIndex", String(sg.z));
-  const css = EcomFX.preview(A.fx, A.duration, A.duration).css, fit = A.fit === "fill" ? "cover" : "contain";
+  const css = EcomFX.preview(A.fx, A.duration, A.duration, A.adj).css, fit = A.fit === "fill" ? "cover" : "contain";
   if (A.type === "image") {
     ps(L.gv, "display", "none"); ps(L.gi, "display", "block"); setSrc(L.gi, pv(A)); ps(L.gi, "filter", css); ps(L.gi, "objectFit", fit);
   } else {
@@ -150,22 +152,28 @@ function applyTrans(L, c, t, force) {
 }
 function syncMedia(force) {
   const t = P.t;
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 4; i++) {
     const L = layers[i], c = clipAt("video", i, t), hid = !!state.trackHidden[i], mute = !!state.trackMuted[i];
     if (!c) { ps(L.wrap, "display", "none"); L.vs.forEach(v => { if (!v.paused) v.pause(); }); L.fxv.forEach(fv => { if (!fv.paused) fv.pause(); }); L.cur = null; continue; }
     ps(L.wrap, "display", hid ? "none" : "block");
     if (isOv(c)) {
       if (!hid) {
         const a = EcomAnim.at(c.anim || "none", clamp(t - c.start, 0, c.duration), c.duration, c.env === false);
-        ps(L.wrap, "transform", `translate(${c.x + a.dx * 100}%,${c.y + a.dy * 100}%) rotate(${a.rot}rad) scale(${(c.scale / 100) * a.s})`);
+        ps(L.wrap, "transform", `translate(${c.x + a.dx * 100}%,${c.y + a.dy * 100}%) rotate(${a.rot}rad) scale(${(c.type === "text" ? 1 : c.scale / 100) * a.s})`);
       }
     } else ps(L.wrap, "transform", `translate(${c.x}%,${c.y}%) scale(${c.scale / 100})`);
     const fitMode = c.fit === "fill" ? "cover" : "contain";
-    L.vs.forEach(v => ps(v, "objectFit", fitMode)); ps(L.img, "objectFit", fitMode);
+    L.vs.forEach(v => ps(v, "objectFit", fitMode)); if (c.type !== "text") ps(L.img, "objectFit", fitMode);
     if (!hid) { applyFx(L, c, t, force); if (isOv(c)) resetTrans(L); else applyTrans(L, c, t, force); }
     if (isStill(c)) {
       L.vs.forEach(v => { ps(v, "display", "none"); if (!v.paused) v.pause(); });
-      ps(L.img, "display", "block"); if (c.type === "text") setSrc(L.img, c.img, c.id + ":" + c.imgVer); else setSrc(L.img, pv(c)); L.cur = c.id;
+      ps(L.img, "display", "block");
+      if (c.type === "text") {
+        const F = $("frame"), k = (c.scale / 100) * Math.min(F.clientWidth, F.clientHeight) / 1080;
+        ps(L.img, "inset", "auto"); ps(L.img, "left", "50%"); ps(L.img, "top", "50%"); ps(L.img, "width", (c.srcW * k) + "px"); ps(L.img, "height", (c.srcH * k) + "px"); ps(L.img, "transform", "translate(-50%,-50%)"); ps(L.img, "objectFit", "fill");
+        setSrc(L.img, c.img, c.id + ":" + c.imgVer);
+      } else { ps(L.img, "inset", ""); ps(L.img, "left", ""); ps(L.img, "top", ""); ps(L.img, "width", ""); ps(L.img, "height", ""); setSrc(L.img, pv(c)); }
+      L.cur = c.id;
     } else {
       ps(L.img, "display", "none");
       const switched = L.cur !== c.id; if (switched) takeStandby(L, c);
@@ -211,6 +219,7 @@ function clipRect(c) {
   const F = $("frame"), Fw = F.clientWidth, Fh = F.clientHeight, S = c.scale / 100, frameAr = Fw / Fh;
   let w, h;
   if (c.fit === "fill" && !isOv(c)) { w = Fw * S; h = Fh * S; }
+  else if (c.type === "text") { const k = (c.scale / 100) * Math.min(Fw, Fh) / 1080; w = (c.srcW || 100) * k; h = (c.srcH || 40) * k; }
   else {
     const ar = c.type === "sticker" ? 1 : (c.srcW && c.srcH ? c.srcW / c.srcH : frameAr);
     if (ar >= frameAr) { w = Fw * S; h = w / ar; } else { h = Fh * S; w = h * ar; }
@@ -251,7 +260,7 @@ function initFrameEditing() {
     if (e.target.dataset.h && c) return startResize(e, c);
     if (e.target.id === "selBox" && c) return startMove(e, c);
     const rect = $("frame").getBoundingClientRect(), px = e.clientX - rect.left, py = e.clientY - rect.top;
-    const hit = [2, 1, 0].filter(tr => !state.trackHidden[tr]).map(tr => clipAt("video", tr, P.t)).filter(Boolean).find(cl => { const r = clipRect(cl); return Math.abs(px - r.cx) <= r.w / 2 && Math.abs(py - r.cy) <= r.h / 2; });
+    const hit = [3, 2, 1, 0].filter(tr => !state.trackHidden[tr]).map(tr => clipAt("video", tr, P.t)).filter(Boolean).find(cl => { const r = clipRect(cl); return Math.abs(px - r.cx) <= r.w / 2 && Math.abs(py - r.cy) <= r.h / 2; });
     if (hit) { state.selected = hit.id; renderTimeline(); renderProps(); updateUI(); startMove(e, hit); }
     else if (state.selected) { state.selected = null; renderTimeline(); renderProps(); updateUI(); }
   });
@@ -267,8 +276,6 @@ function updateUI(follow) {
     ps(ph, "transform", `translateX(${LABEL + P.t * state.pps}px)`);
     if (follow) { const tl = $("timeline"), x = LABEL + P.t * state.pps; if (x > tl.scrollLeft + tl.clientWidth - 40) tl.scrollLeft = x - 120; }
   }
-  const cap = state.captions.find(c => P.t >= c.start && P.t < c.end), ct = cap ? cap.text : "";
-  if (ct !== lastCap) { lastCap = ct; $("captionLayer").textContent = ct; }
   ps($("emptyPreview"), "display", state.clips.length ? "none" : "block");
   if (!P.playing || (++uiTick % 10) === 0) updateSelBox();
 }
@@ -350,7 +357,7 @@ function addClip(m, kind, track, time, extra) {
     const o = state.clips.find(c => c.kind === kind && c.track === track && start < c.start + c.duration - 1e-6 && start + dur > c.start + 1e-6);
     if (!o) break; start = o.start + o.duration;
   }
-  const c = { id: newId(), mediaId: m.id, kind, track, type: kind === "audio" ? "audio" : m.type, path: m.path, name: m.name, start, inPoint: 0, duration: dur, mediaDur: m.type === "image" ? 0 : dur, scale: 100, x: 0, y: 0, volume: 100, hasAudio: kind === "audio" ? true : !!m.hasAudio, proxy: m.proxy || "", thumb: m.thumb || "", fit: "fit", fx: [], srcW: m.width || 0, srcH: m.height || 0 };
+  const c = { id: newId(), mediaId: m.id, kind, track, type: kind === "audio" ? "audio" : m.type, path: m.path, name: m.name, start, inPoint: 0, duration: dur, mediaDur: m.type === "image" ? 0 : dur, scale: 100, x: 0, y: 0, volume: 100, hasAudio: kind === "audio" ? true : !!m.hasAudio, proxy: m.proxy || "", thumb: m.thumb || "", fit: "fit", fx: [], adj: {}, srcW: m.width || 0, srcH: m.height || 0 };
   if (extra) Object.assign(c, extra);
   state.clips.push(c); state.selected = c.id;
   if (!P.playing) P.t = c.start;
@@ -360,7 +367,7 @@ function addClip(m, kind, track, time, extra) {
 }
 function dropOnLane(m, lane, t) {
   const kind = lane.dataset.kind; let track = +lane.dataset.track || 0;
-  if (kind === "video") { if (m.type === "audio") return setStatus("Un son se dépose sur une piste audio."); }
+  if (kind === "video") { if (m.type === "audio") return setStatus("Un son se dépose sur une piste audio."); if (track === 3) return setStatus("Cette piste est réservée aux textes et aux légendes."); }
   else {
     if (m.type === "image") return setStatus("Une photo ne peut pas être déposée sur une piste audio.");
     if (m.type === "video" && !m.hasAudio) return setStatus("Cette vidéo n'a pas de son.");
@@ -390,7 +397,7 @@ function addSticker(s, track, time) {
 const TEXT_DEFAULT = () => (EcomI18n.lang() === "en" ? "Your text" : "Votre texte");
 function addText(preset, track, time) {
   if (time == null) time = P.t;
-  if (track == null) { track = [2, 1, 0].find(tr => !overlaps({ kind: "video" }, tr, time, 3)); if (track == null) track = 2; }
+  if (track == null) { track = [3, 2, 1, 0].find(tr => !overlaps({ kind: "video" }, tr, time, 3)); if (track == null) track = 3; }
   const text = TEXT_DEFAULT(), ts = JSON.parse(JSON.stringify(preset.ts)), r = EcomText.render(text, ts);
   const m = { id: "txt_" + preset.id, path: "", name: text, type: "text", duration: 3, hasAudio: false };
   return addClip(m, "video", track, time, { type: "text", text, ts, img: r.url, srcW: r.w, srcH: r.h, imgVer: 1, anim: "none", env: false, scale: 60, y: 22, mediaDur: 0, path: "" });
@@ -423,12 +430,12 @@ const ICO = { eye: `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" 
 function trackBtns(kind, tr) {
   const hid = kind === "video" && state.trackHidden[tr], mut = kind === "video" ? state.trackMuted[tr] : state.audioMuted[tr];
   const eye = kind === "video" ? `<button class="tg${hid ? " on" : ""}" data-tg="hide" data-kind="video" data-track="${tr}" title="${hid ? "Afficher la piste" : "Masquer la piste"}">${hid ? ICO.eyeoff : ICO.eye}</button>` : "";
-  const spk = `<button class="tg${mut ? " on" : ""}" data-tg="mute" data-kind="${kind}" data-track="${tr}" title="${mut ? "Activer le son de la piste" : "Couper le son de la piste"}">${mut ? ICO.spkoff : ICO.spk}</button>`;
+  const spk = kind === "video" && tr === 3 ? "" : `<button class="tg${mut ? " on" : ""}" data-tg="mute" data-kind="${kind}" data-track="${tr}" title="${mut ? "Activer le son de la piste" : "Couper le son de la piste"}">${mut ? ICO.spkoff : ICO.spk}</button>`;
   return eye + spk;
 }
 let dragId = null;
 function toggleTrack(kind, tr, what) {
-  const name = (kind === "video" ? "V" : "A") + (tr + 1);
+  const name = kind === "video" && tr === 3 ? "CC" : (kind === "video" ? "V" : "A") + (tr + 1);
   if (what === "hide") { state.trackHidden[tr] = !state.trackHidden[tr]; setStatus(state.trackHidden[tr] ? `Piste ${name} masquée` : `Piste ${name} affichée`); }
   else { const arr = kind === "video" ? state.trackMuted : state.audioMuted; arr[tr] = !arr[tr]; setStatus(arr[tr] ? `Son de la piste ${name} coupé` : `Son de la piste ${name} activé`); }
   renderTimeline(); syncMedia(true); updateSelBox();
@@ -444,7 +451,7 @@ function renderTimeline() {
     return `<div class="clip ${c.kind} ${c.type}${c.id === state.selected ? " selected" : ""}${c.id === dragId ? " dragging" : ""}" data-id="${c.id}" style="left:${c.start * pps}px;width:${Math.max(8, c.duration * pps)}px${bg}"><i class="h hl"></i>${c.trans && prevAdj(c) ? '<i class="tbadge">⇋</i>' : ""}<span class="cname">${icon} ${esc(c.name)}</span><i class="h hr"></i></div>`;
   }).join("");
   let h = `<div class="tl-inner" style="width:${LABEL + width}px"><div class="ruler-row"><div class="tlabel corner"></div><div class="ruler" id="ruler" style="width:${width}px">${ticks}</div></div>`;
-  for (let v = 2; v >= 0; v--) h += `<div class="track-row video${state.trackHidden[v] ? " hid" : ""}${state.trackMuted[v] ? " mut" : ""}"><div class="tlabel"><span class="tn">V${v + 1}</span>${trackBtns("video", v)}</div><div class="lane" data-kind="video" data-track="${v}" style="width:${width}px">${clipHtml("video", v)}</div></div>`;
+  for (let v = 3; v >= 0; v--) h += `<div class="track-row video${state.trackHidden[v] ? " hid" : ""}${state.trackMuted[v] ? " mut" : ""}"><div class="tlabel"><span class="tn">${v === 3 ? "CC" : "V" + (v + 1)}</span>${trackBtns("video", v)}</div><div class="lane" data-kind="video" data-track="${v}" style="width:${width}px">${clipHtml("video", v)}</div></div>`;
   for (let a = 0; a < state.audioTracks; a++) h += `<div class="track-row audio${state.audioMuted[a] ? " mut" : ""}"><div class="tlabel"><span class="tn">A${a + 1}</span>${trackBtns("audio", a)}</div><div class="lane" data-kind="audio" data-track="${a}" style="width:${width}px">${clipHtml("audio", a)}</div></div>`;
   if (state.audioTracks < 3) h += `<div class="track-row audio"><div class="tlabel">＋</div><div class="lane newlane" data-kind="audio" data-new="1" style="width:${width}px">Déposez un son ici pour créer la piste audio ${state.audioTracks + 1}</div></div>`;
   h += `<div class="playhead" id="playhead"></div></div>`;
@@ -488,7 +495,7 @@ function startDrag(e, clip, mode) {
     const dx = (ev.clientX - x0) / state.pps, pps = state.pps;
     if (mode === "move") {
       const ns = snapTime(clip, Math.max(0, o.start + dx), clip.duration); let track = clip.track;
-      const lane = document.elementsFromPoint(ev.clientX, ev.clientY).find(x => x.classList && x.classList.contains("lane") && x.dataset.kind === clip.kind && !x.dataset.new);
+      const lane = document.elementsFromPoint(ev.clientX, ev.clientY).find(x => x.classList && x.classList.contains("lane") && x.dataset.kind === clip.kind && !x.dataset.new && !(+x.dataset.track === 3 && clip.kind === "video" && !isOv(clip)));
       if (lane) track = +lane.dataset.track;
       clip.start = ns;
       if (track !== clip.track) { clip.track = track; const ln = document.querySelector(`.lane[data-kind="${clip.kind}"][data-track="${track}"]`); if (ln && el) ln.appendChild(el); }
@@ -534,6 +541,7 @@ function initTimeline() {
     if (clipEl) {
       const c = state.clips.find(x => x.id === clipEl.dataset.id); if (!c) return;
       if (state.selected !== c.id) { state.selected = c.id; renderTimeline(); renderProps(); }
+      if (c.cap && (P.t < c.start || P.t >= c.start + c.duration)) seek(c.start + Math.min(0.05, c.duration / 2));
       startDrag(e, c, e.target.classList.contains("hl") ? "left" : e.target.classList.contains("hr") ? "right" : "move");
       return;
     }
@@ -575,7 +583,7 @@ function renderProps() {
     return;
   }
   const row = (key, label, min, max, val, unit, step) => `<div class="row"><label>${label}<span>${val}${unit}</span></label><input type="range" data-p="${key}" data-u="${unit}" min="${min}" max="${max}" step="${step || 1}" value="${val}"></div>`;
-  const kindTxt = c.type === "text" ? "Texte" : c.type === "sticker" ? "Sticker" : c.type === "image" ? "Photo" : c.kind === "audio" ? "Audio" : "Vidéo";
+  const kindTxt = c.cap ? "Légende" : c.type === "text" ? "Texte" : c.type === "sticker" ? "Sticker" : c.type === "image" ? "Photo" : c.kind === "audio" ? "Audio" : "Vidéo";
   let h = `<div class="insp-title">Détails <small>${kindTxt}</small></div><div class="insp-name">${esc(c.name)}</div>`;
   if (!isStill(c) && (c.kind === "audio" || c.hasAudio)) h += `<div class="insp-sec"><h4>Audio</h4>${row("volume", "Volume", 0, 100, c.volume, "%")}</div>`;
   if (c.type === "text") {
@@ -600,6 +608,11 @@ function renderProps() {
     if (!isOv(c)) h += `<div class="row seg"><button data-fit="fit" class="${c.fit === "fill" ? "" : "on"}">Ajuster</button><button data-fit="fill" class="${c.fit === "fill" ? "on" : ""}">Remplir</button></div>`;
     h += `<div class="row"><button id="resetProps" style="width:100%">Recentrer</button></div></div>`;
   }
+  if (c.kind === "video" && !isOv(c)) {
+    const ad = c.adj || {}, arow = (key, label, min) => `<div class="row"><label>${label}<span>${ad[key] || 0}</span></label><input type="range" data-adj="${key}" min="${min}" max="100" value="${ad[key] || 0}"></div>`;
+    h += `<div class="insp-sec"><h4>Réglages de l'image</h4>${arow("contrast", "Contraste", -100)}${arow("brightness", "Luminosité", -100)}${arow("sharp", "Netteté", 0)}${arow("saturation", "Saturation", -100)}<div class="row"><button id="adjReset" style="width:100%">Réinitialiser les réglages</button></div></div>`;
+  }
+  if (c.cap) h += `<div class="insp-sec"><h4>Légende</h4><div class="row"><button id="capStyleAll" style="width:100%">Appliquer ce style à toutes les légendes</button></div><div class="insp-hint">Modifiez le texte ci-dessus ; glissez les bords du clip pour ajuster son début et sa fin.</div></div>`;
   if (c.kind === "video" && !isOv(c)) {
     const chips = (c.fx || []).map(id => EcomFX.BY[id] ? `<span class="chip">${esc(EcomFX.BY[id].name)}<button data-fxrm="${id}" title="Retirer">×</button></span>` : "").join("");
     h += `<div class="insp-sec"><h4>Effets</h4>${chips ? `<div class="chips">${chips}</div><div class="row"><button id="fxClear" style="width:100%">Retirer tous les effets</button></div>` : `<div class="insp-hint">Aucun effet. Ouvrez l'onglet Effets et cliquez sur un effet pour l'appliquer à tout ce clip.</div>`}</div>`;
@@ -641,6 +654,7 @@ function initProps() {
       if (t.type === "range") t.previousElementSibling.querySelector("span").textContent = t.value + (t.dataset.u || "");
       scheduleText(c); if (t.tagName === "SELECT") renderPropsKeepFocus(); return;
     }
+    if (t.dataset.adj) { c.adj = c.adj || {}; c.adj[t.dataset.adj] = +t.value; t.previousElementSibling.querySelector("span").textContent = t.value; syncMedia(true); return; }
     if (t.dataset.env) { c.env = t.checked; syncMedia(true); return; }
     const k = t.dataset.p; if (!k || t.tagName === "SELECT") return;
     const v = +t.value;
@@ -664,6 +678,8 @@ function initProps() {
     if (t.dataset.fit) { c.fit = t.dataset.fit; renderProps(); syncMedia(true); updateSelBox(); }
     if (t.dataset.fxrm) { c.fx = (c.fx || []).filter(x => x !== t.dataset.fxrm); renderProps(); syncMedia(true); }
     if (t.id === "fxClear") { c.fx = []; renderProps(); syncMedia(true); }
+    if (t.id === "adjReset") { c.adj = {}; renderProps(); syncMedia(true); }
+    if (t.id === "capStyleAll") applyCaptionStyle(c.ts, c.scale, c.y);
     if (t.dataset.trrm) { c.trans = null; renderProps(); renderTimeline(); syncMedia(true); }
     if (t.dataset.tsb) { c.ts[t.dataset.tsb] = !c.ts[t.dataset.tsb]; regenText(c); renderProps(); renderTimeline(); syncMedia(true); updateSelBox(); }
     if (t.dataset.align) { c.ts.align = t.dataset.align; regenText(c); renderProps(); syncMedia(true); }
@@ -788,27 +804,37 @@ const PROV = {
 };
 function provInfo(id) { const p = PROV[id]; return `<b>${p.free ? "Gratuit" : "Payant"}</b> — ${p.note}<br>Créez votre clé sur : ${p.site}`; }
 function keyPlaceholder(id) { return capSettings.has && capSettings.has[id] ? "Clé enregistrée — laisser vide pour la conserver" : "Collez votre clé API ici"; }
+const capThumbs = {};
+const capClipCount = () => state.clips.filter(c => c.cap).length;
 function captionsHtml() {
-  const list = state.captions.map((c, i) => `<div class="cap-item"><a data-seek="${i}">${fmt(c.start, 1)}</a><input data-cap="${i}" value="${esc(c.text)}"><button data-del="${i}" title="Supprimer">×</button></div>`).join("");
   const opt = free => Object.keys(PROV).filter(k => PROV[k].free === free).map(k => `<option value="${k}">${PROV[k].name}</option>`).join("");
+  const styles = EcomText.CAPTION_STYLES.map(st => {
+    if (!capThumbs[st.id]) capThumbs[st.id] = EcomText.render("Légende", st.ts, 90).url;
+    return `<div class="cst${state.capStyle === st.id ? " on" : ""}" data-cst="${st.id}" title="${esc(st.name)}"><img src="${capThumbs[st.id]}"><small>${esc(st.name)}</small></div>`;
+  }).join("");
+  const n = capClipCount();
   return `<div class="panel-pad cap-panel">
-  <label>Plateforme de transcription</label>
+  <label>1. Style des légendes</label>
+  <div class="cap-styles">${styles}</div>
+  <label>Position</label>
+  <select id="capPos"><option value="bottom">En bas</option><option value="mid">Au milieu</option><option value="top">En haut</option></select>
+  <label>2. Plateforme de transcription</label>
   <select id="capProvider"><optgroup label="Gratuites">${opt(true)}</optgroup><optgroup label="Payantes">${opt(false)}</optgroup></select>
   <small class="muted" id="capInfo">${provInfo(capSettings.provider)}</small>
   <input id="capKey" type="password" placeholder="${keyPlaceholder(capSettings.provider)}">
   <button id="capSave">Enregistrer la clé</button>
   <small class="muted">La clé reste sur cet ordinateur (chiffrée par Windows). Chaque plateforme a sa propre clé.</small>
-  <label>Langue parlée</label>
+  <label>3. Langue et son</label>
   <select id="capLang"><option value="fr">Français</option><option value="en">English</option><option value="pt">Português</option><option value="es">Español</option><option value="auto">Détection automatique</option></select>
-  <label>Son à transcrire</label>
   <select id="capSrc"><option value="all">Tout l'audio de la timeline</option><option value="a0">Piste audio 1</option><option value="a1">Piste audio 2</option><option value="a2">Piste audio 3</option><option value="video">Son des vidéos uniquement</option></select>
   <button id="capGen" class="primary wide">✨ Générer les légendes</button>
   <div id="capMsg" class="muted"></div>
-  ${state.captions.length ? `<div class="cap-head"><b>${state.captions.length} légendes</b><button id="capClear">Tout effacer</button></div>` : ""}
-  <div id="capList">${list}</div></div>`;
+  ${n ? `<div class="cap-head"><b>${n} légendes dans le projet (piste CC)</b></div><button id="capApplyAll">Appliquer le style choisi aux légendes existantes</button><button id="capClear">Supprimer toutes les légendes</button>` : ""}
+  <p class="tip" style="margin:6px 0">Les légendes sont ajoutées automatiquement à la piste CC de la timeline. Cliquez sur une légende pour modifier son texte, son style ou sa durée.</p></div>`;
 }
 function bindCaptions() {
-  $("capProvider").value = capSettings.provider;
+  $("capProvider").value = capSettings.provider; $("capPos").value = state.capPos || "bottom";
+  $("capPos").onchange = () => { state.capPos = $("capPos").value; };
   $("capProvider").onchange = () => { capSettings.provider = $("capProvider").value; $("capInfo").innerHTML = provInfo(capSettings.provider); $("capKey").placeholder = keyPlaceholder(capSettings.provider); $("capKey").value = ""; };
   $("capSave").onclick = async () => {
     const id = $("capProvider").value;
@@ -817,12 +843,9 @@ function bindCaptions() {
     $("capMsg").textContent = capSettings.has[id] ? "Réglages enregistrés ✔" : "Aucune clé enregistrée.";
   };
   $("capGen").onclick = generateCaptions;
-  const clr = $("capClear"); if (clr) clr.onclick = () => { state.captions = []; updateUI(); showPanel("captions"); };
-  $("capList").addEventListener("input", e => { const i = e.target.dataset.cap; if (i != null) { state.captions[i].text = e.target.value; updateUI(); } });
-  $("capList").addEventListener("click", e => {
-    if (e.target.dataset.del != null) { state.captions.splice(+e.target.dataset.del, 1); updateUI(); showPanel("captions"); }
-    if (e.target.dataset.seek != null) seek(state.captions[+e.target.dataset.seek].start);
-  });
+  document.querySelectorAll(".cst").forEach(el => el.onclick = () => { state.capStyle = el.dataset.cst; document.querySelectorAll(".cst").forEach(x => x.classList.toggle("on", x === el)); });
+  const clr = $("capClear"); if (clr) clr.onclick = () => { state.clips = state.clips.filter(c => !c.cap); state.selected = null; renderTimeline(); renderProps(); syncMedia(true); updateUI(); showPanel("captions"); setStatus("Légendes supprimées"); };
+  const ap = $("capApplyAll"); if (ap) ap.onclick = () => applyCaptionStyle(EcomText.CAPTION_BY[state.capStyle].ts, 54, capY());
 }
 function audioSources(filter) {
   const out = [];
@@ -861,22 +884,55 @@ function buildCaptions(r) {
   caps.forEach((c, i) => { const next = caps[i + 1]; c.end = Math.max(c.start + 0.4, Math.min(c.end + 0.1, next ? next.start : c.end + 0.1)); });
   return caps;
 }
+const capY = () => { const portrait = RATIOS[state.ratio] < 1, p = state.capPos || "bottom"; return p === "top" ? (portrait ? -30 : -38) : p === "mid" ? 0 : (portrait ? 30 : 38); };
+function newTextClip(text, ts, start, dur, track, extra) {
+  const r = EcomText.render(text, ts);
+  return Object.assign({ id: newId(), mediaId: "txt", kind: "video", track, type: "text", path: "", name: (text || "").replace(/\s+/g, " ").trim().slice(0, 24) || "Texte", start, inPoint: 0, duration: dur, mediaDur: 0,
+    scale: 60, x: 0, y: 22, volume: 100, hasAudio: false, proxy: "", thumb: "", fit: "fit", fx: [], adj: {}, srcW: r.w, srcH: r.h, text, ts: JSON.parse(JSON.stringify(ts)), img: r.url, imgVer: 1, anim: "none", env: false }, extra || {});
+}
+// Crée un clip texte par légende (piste CC), comme dans CapCut
+async function addCaptionClips(caps, progress) {
+  const style = EcomText.CAPTION_BY[state.capStyle] || EcomText.CAPTION_STYLES[0], y = capY();
+  state.clips = state.clips.filter(c => !c.cap);
+  for (let i = 0; i < caps.length; i++) {
+    const cp = caps[i], nxt = caps[i + 1];
+    let end = cp.end; if (nxt && end > nxt.start) end = Math.max(cp.start + 0.1, nxt.start);
+    const dur = Math.max(0.1, end - cp.start);
+    let track = [3, 2, 1, 0].find(tr => !overlaps({ kind: "video" }, tr, cp.start, dur)); if (track == null) track = 3;
+    state.clips.push(newTextClip(cp.text, style.ts, cp.start, dur, track, { cap: true, scale: 54, y }));
+    if (i % 8 === 7) { if (progress) progress(i + 1, caps.length); await new Promise(r => setTimeout(r, 0)); }
+  }
+}
+// anciens projets : les légendes de l'ancienne liste deviennent des clips
+function migrateCaptions() {
+  if (!state.captions || !state.captions.length) { state.captions = []; return; }
+  const style = EcomText.CAPTION_BY[state.capStyle] || EcomText.CAPTION_STYLES[0];
+  state.captions.forEach(cp => { const dur = Math.max(0.1, cp.end - cp.start); state.clips.push(newTextClip(cp.text, style.ts, cp.start, dur, 3, { cap: true, scale: 54, y: capY() })); });
+  state.captions = [];
+}
+// Applique un style à toutes les légendes du projet
+async function applyCaptionStyle(ts, scale, y) {
+  const list = state.clips.filter(c => c.cap);
+  list.forEach((c, i) => { c.ts = JSON.parse(JSON.stringify(ts)); if (scale != null) c.scale = scale; if (y != null) c.y = y; const r = EcomText.render(c.text, c.ts); c.img = r.url; c.srcW = r.w; c.srcH = r.h; c.imgVer = (c.imgVer || 0) + 1; });
+  renderTimeline(); renderProps(); syncMedia(true); updateSelBox(); setStatus(`Style appliqué à ${list.length} légendes`);
+}
 async function generateCaptions() {
   if (capBusy) return;
   const sources = audioSources($("capSrc").value);
   if (!sources.length) { $("capMsg").textContent = "Aucun son à transcrire : ajoutez une voix off ou une vidéo avec du son sur la timeline."; return; }
   const prov = $("capProvider").value; capSettings.provider = prov;
   if (!(capSettings.has && capSettings.has[prov])) { $("capMsg").textContent = "Enregistrez d'abord votre clé API pour cette plateforme (voir ci-dessus)."; return; }
-  if (state.captions.length && !confirm(EcomI18n.t("Remplacer les légendes existantes ?"))) return;
+  if (capClipCount() && !confirm(EcomI18n.t("Remplacer les légendes existantes ?"))) return;
   capBusy = true; $("capGen").disabled = true; $("capMsg").textContent = "Démarrage…";
-  const lang = $("capLang").value;
+  const lang = $("capLang").value, src = $("capSrc").value;
   const r = await window.ecom.transcribe({ sources, total: total(), language: lang, provider: prov });
-  capBusy = false;
-  if (!r.ok) { if ($("capMsg")) { $("capGen").disabled = false; $("capMsg").textContent = "❌ " + r.error; } return; }
-  state.captions = buildCaptions(r);
-  setStatus(state.captions.length + " légendes générées");
-  if (currentPanel === "captions") { showPanel("captions"); $("capLang").value = lang; $("capMsg").textContent = state.captions.length ? "✔ Légendes générées. Vous pouvez les corriger ci-dessous." : "Aucune parole détectée."; }
-  updateUI();
+  if (!r.ok) { capBusy = false; if ($("capMsg")) { $("capGen").disabled = false; $("capMsg").textContent = "❌ " + r.error; } return; }
+  const caps = buildCaptions(r);
+  await addCaptionClips(caps, (i, n) => { const m = $("capMsg"); if (m) m.textContent = `Création des légendes… ${i}/${n}`; });
+  capBusy = false; state.selected = null;
+  renderTimeline(); renderProps(); syncMedia(true); updateUI();
+  setStatus(`${caps.length} légendes ajoutées au projet`);
+  if (currentPanel === "captions") { showPanel("captions"); $("capLang").value = lang; $("capSrc").value = src; $("capMsg").textContent = caps.length ? "✔ Légendes ajoutées à la piste CC. Cliquez sur une légende dans la timeline pour la modifier." : "Aucune parole détectée."; }
 }
 
 /* ---------- Projets ---------- */
@@ -891,7 +947,9 @@ async function openProject() {
   state.ratio = RATIOS[state.ratio] ? state.ratio : "16:9";
   (state.media || []).forEach(m => { m.proxy = ""; m.proxyTried = false; });
   (state.clips || []).forEach(c => { c.proxy = ""; if (c.type === "sticker" && c.stickerId) c.path = stickerPath(c.stickerId); c.fx = c.fx || []; if (c.type === "text" && !c.ts) c.ts = Object.assign({}, EcomText.BASE); c.scale = c.scale || 100; c.x = c.x || 0; c.y = c.y || 0; c.volume = c.volume == null ? 100 : c.volume; });
-  state.trackHidden = state.trackHidden || [false, false, false]; state.trackMuted = state.trackMuted || [false, false, false]; state.audioMuted = state.audioMuted || [false, false, false];
+  const pad = (a, n) => { a = (a || []).slice(); while (a.length < n) a.push(false); return a; };
+  state.trackHidden = pad(state.trackHidden, 4); state.trackMuted = pad(state.trackMuted, 4); state.audioMuted = pad(state.audioMuted, 3); state.capStyle = state.capStyle || "classic"; state.capPos = state.capPos || "bottom";
+  migrateCaptions();
   P.t = 0; $("zoom").value = state.pps; applyRatio(); showPanel(currentPanel); renderTimeline(); (state.media || []).forEach(ensureProxy); syncMedia(true); updateUI(); setStatus("Projet chargé");
 }
 function newProject() {
@@ -907,9 +965,9 @@ function openExport() {
 async function doExport() {
   const out = await window.ecom.pickExportPath("EcomVideoStudio-export.mp4"); if (!out) return;
   const T = total();
-  const video = state.clips.filter(c => c.kind === "video" && !state.trackHidden[c.track]).map(c => ({ path: c.path, type: c.type, track: c.track, start: c.start, inPoint: c.inPoint, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fit: c.fit, anim: c.anim, fx: c.fx || [], srcW: c.srcW || 0, srcH: c.srcH || 0, trans: c.trans || null, env: c.env, img: c.type === "text" ? c.img : undefined }));
+  const video = state.clips.filter(c => c.kind === "video" && !state.trackHidden[c.track]).map(c => ({ path: c.path, type: c.type, track: c.track, start: c.start, inPoint: c.inPoint, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fit: c.fit, anim: c.anim, fx: c.fx || [], srcW: c.srcW || 0, srcH: c.srcH || 0, trans: c.trans || null, env: c.env, adj: c.adj || {}, img: c.type === "text" ? c.img : undefined }));
   $("doExport").disabled = true; $("exportLog").textContent = "Export en cours…\n"; $("expBar").classList.remove("hidden");
-  const r = await window.ecom.exportVideo({ video, audio: audioSources("all"), total: T, resolution, ratio: state.ratio, output: out, captions: $("burnCaps").checked ? state.captions : [] });
+  const r = await window.ecom.exportVideo({ video, audio: audioSources("all"), total: T, resolution, ratio: state.ratio, output: out, captions: [] });
   $("doExport").disabled = false;
   if (r.ok) { $("expFill").style.width = "100%"; $("exportLog").textContent = "✔ Export terminé :\n" + r.output + (r.warning ? "\n⚠ " + r.warning : ""); setStatus("Export terminé"); }
   else $("exportLog").textContent = "❌ Échec de l'export :\n" + r.error;

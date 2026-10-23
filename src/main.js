@@ -126,7 +126,12 @@ ipcMain.handle("export-video", async (_, o) => {
     const caps = (o.captions || []).filter(c => c.text && c.end > c.start);
     let burn = caps.length > 0;
     if (burn) prepareSubs(tmp, caps, res);
-    const run = () => runFF(buildExportArgs(o, res, burn, o.output), { cwd: tmp, onData: s => send("export-progress", s) });
+    o.writeGraph = g => { fs.writeFileSync(path.join(tmp, "filter.txt"), g, "utf8"); return "filter.txt"; };
+    const run = async () => {
+      let r = await runFF(buildExportArgs(o, res, burn, o.output), { cwd: tmp, onData: s => send("export-progress", s) });
+      if (r.code !== 0 && !o.graphFlag && /filter_complex_script/.test(r.stderr)) { o.graphFlag = "-/filter_complex"; r = await runFF(buildExportArgs(o, res, burn, o.output), { cwd: tmp, onData: s => send("export-progress", s) }); }
+      return r;
+    };
     let r = await run(), warning;
     // Repli progressif : si le moteur vidéo embarqué refuse une fonction, on réessaie sans elle
     const steps = [
