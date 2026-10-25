@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, safeStorage } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, safeStorage, Menu, shell } = require("electron");
 const path = require("path"), fs = require("fs"), os = require("os"), crypto = require("crypto");
 const { spawn } = require("child_process");
 const ffmpegPath = require("ffmpeg-static").replace("app.asar", "app.asar.unpacked");
@@ -15,7 +15,14 @@ function createWindow() {
   win.setMenuBarVisibility(false);
   win.loadFile(path.join(__dirname, "index.html"));
 }
-app.whenReady().then(createWindow);
+// ---------- Dossier de travail (Vidéos\\EcomVideoStudio : Projets + Exports), créé automatiquement ----------
+function baseDir() {
+  let v; try { v = app.getPath("videos"); } catch (e) { v = path.join(app.getPath("home"), "Videos"); }
+  return path.join(v, "EcomVideoStudio");
+}
+const projDir = () => path.join(baseDir(), "Projets"), exportDir = () => path.join(baseDir(), "Exports");
+function ensureFolders() { [baseDir(), projDir(), exportDir()].forEach(d => { try { fs.mkdirSync(d, { recursive: true }); } catch (e) {} }); }
+app.whenReady().then(() => { Menu.setApplicationMenu(null); ensureFolders(); createWindow(); });
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
 
 const send = (ch, d) => { try { win && win.webContents.send(ch, d); } catch (e) {} };
@@ -84,19 +91,40 @@ ipcMain.handle("thumb", (_, file, dur) => new Promise(resolve => {
   p.on("error", () => resolve(""));
   p.on("close", () => { const b = Buffer.concat(chunks); resolve(b.length ? "data:image/jpeg;base64," + b.toString("base64") : ""); });
 }));
+const pid = id => String(id || "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 60);
+function writeAtomic(f, data) { const t = f + ".tmp"; fs.writeFileSync(t, data); fs.renameSync(t, f); }
+function writeProject(id, meta, json) {
+  id = pid(id); if (!id) return false;
+  ensureFolders();
+  writeAtomic(path.join(projDir(), id + ".ecomproj"), json);
+  writeAtomic(path.join(projDir(), id + ".meta"), JSON.stringify(Object.assign({}, meta, { id })));
+  return true;
+}
+ipcMain.handle("proj-list", () => {
+  ensureFolders();
+  const out = [];
+  try { fs.readdirSync(projDir()).filter(f => f.endsWith(".meta")).forEach(f => { try { out.push(JSON.parse(fs.readFileSync(path.join(projDir(), f), "utf8"))); } catch (e) {} }); } catch (e) {}
+  return out.sort((a, b) => (b.updated || 0) - (a.updated || 0));
+});
+ipcMain.handle("proj-load", (_, id) => { try { return fs.readFileSync(path.join(projDir(), pid(id) + ".ecomproj"), "utf8"); } catch (e) { return null; } });
+ipcMain.handle("proj-save", (_, id, meta, json) => { try { return writeProject(id, meta, json); } catch (e) { return false; } });
+ipcMain.on("proj-save-sync", (e, id, meta, json) => { try { e.returnValue = writeProject(id, meta, json); } catch (err) { e.returnValue = false; } });
+ipcMain.handle("proj-delete", (_, id) => { id = pid(id); ["ecomproj", "meta"].forEach(x => { try { fs.unlinkSync(path.join(projDir(), id + "." + x)); } catch (e) {} }); return true; });
+ipcMain.handle("proj-dir", () => { ensureFolders(); return baseDir(); });
+ipcMain.handle("open-folder", () => { ensureFolders(); shell.openPath(baseDir()); return true; });
 ipcMain.handle("save-project", async (_, data) => {
-  const r = await dialog.showSaveDialog(win, { title: M("saveProject"), defaultPath: "EcomVideoStudio-project.json", filters: [{ name: M("project"), extensions: ["json"] }] });
+  const r = await dialog.showSaveDialog(win, { title: M("saveProject"), defaultPath: path.join(projDir(), "EcomVideoStudio-project.json"), filters: [{ name: M("project"), extensions: ["json"] }] });
   if (r.canceled) return null;
   fs.writeFileSync(r.filePath, JSON.stringify(data, null, 2));
   return r.filePath;
 });
 ipcMain.handle("load-project", async () => {
-  const r = await dialog.showOpenDialog(win, { properties: ["openFile"], filters: [{ name: M("project"), extensions: ["json"] }] });
+  const r = await dialog.showOpenDialog(win, { defaultPath: projDir(), properties: ["openFile"], filters: [{ name: M("project"), extensions: ["ecomproj", "json"] }] });
   if (r.canceled) return null;
   try { return JSON.parse(fs.readFileSync(r.filePaths[0], "utf8")); } catch (e) { return null; }
 });
 ipcMain.handle("pick-export-path", async (_, name) => {
-  const r = await dialog.showSaveDialog(win, { title: M("exportVideo"), defaultPath: name || "EcomVideoStudio-export.mp4", filters: [{ name: M("videoMp4"), extensions: ["mp4"] }] });
+  const r = await dialog.showSaveDialog(win, { title: M("exportVideo"), defaultPath: path.join(exportDir(), name || "EcomVideoStudio-export.mp4"), filters: [{ name: M("videoMp4"), extensions: ["mp4"] }] });
   return r.canceled ? null : r.filePath;
 });
 

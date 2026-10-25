@@ -1,6 +1,6 @@
 {
   "name": "ecomvideostudio",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "description": "Ecom Video Studio - logiciel de montage vidéo par Ecom Academy",
   "main": "src/main.js",
   "author": "ECOM ACADEMY",

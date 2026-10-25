@@ -2,6 +2,13 @@ const { contextBridge, ipcRenderer, webUtils } = require("electron");
 contextBridge.exposeInMainWorld("ecom", {
   openMedia: () => ipcRenderer.invoke("open-media"),
   probe: f => ipcRenderer.invoke("probe", f),
+  projList: () => ipcRenderer.invoke("proj-list"),
+  projLoad: id => ipcRenderer.invoke("proj-load", id),
+  projSave: (id, meta, json) => ipcRenderer.invoke("proj-save", id, meta, json),
+  projSaveSync: (id, meta, json) => ipcRenderer.sendSync("proj-save-sync", id, meta, json),
+  projDelete: id => ipcRenderer.invoke("proj-delete", id),
+  projDir: () => ipcRenderer.invoke("proj-dir"),
+  openFolder: () => ipcRenderer.invoke("open-folder"),
   makeProxy: f => ipcRenderer.invoke("make-proxy", f),
   thumb: (f, d) => ipcRenderer.invoke("thumb", f, d),
   getStickerDir: () => ipcRenderer.invoke("sticker-dir"),

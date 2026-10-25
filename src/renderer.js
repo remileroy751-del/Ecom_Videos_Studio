@@ -10,7 +10,7 @@ function fileUrl(p) { return encodeURI("file:///" + p.replace(/\\/g, "/")).repla
 function fmt(s, dec) { s = Math.max(0, s || 0); const m = Math.floor(s / 60), r = s - m * 60; return String(m).padStart(2, "0") + ":" + (dec ? r.toFixed(1).padStart(4, "0") : String(Math.floor(r)).padStart(2, "0")); }
 
 let state = freshState();
-function freshState() { return { media: [], clips: [], audioTracks: 1, captions: [], selected: null, resolution: "1080", ratio: "16:9", pps: 40, trackHidden: [false, false, false, false], trackMuted: [false, false, false, false], audioMuted: [false, false, false], capStyle: "classic", capPos: "bottom" }; }
+function freshState() { return { media: [], clips: [], audioTracks: 1, captions: [], selected: null, resolution: "1080", ratio: "16:9", id: "", name: "", created: 0, pps: 40, trackHidden: [false, false, false, false], trackMuted: [false, false, false, false], audioMuted: [false, false, false], capStyle: "classic", capPos: "bottom" }; }
 const isStill = c => c.type === "image" || c.type === "sticker" || c.type === "text";
 const isOv = c => c.type === "sticker" || c.type === "text";
 let stickerDir = "", fxDir = "", fxCat = "all";
@@ -29,28 +29,49 @@ const clipAt = (kind, track, t) => state.clips.find(c => c.kind === kind && c.tr
 function ps(el, prop, val) { const c = el._c || (el._c = {}); if (c[prop] === val) return; c[prop] = val; el.style[prop] = val; }
 const pv = c => c.proxy || c.path;            // fichier utilisé pour l'aperçu (proxy léger si disponible)
 const layers = [], aEls = [];
-for (let i = 0; i < 4; i++) {
-  const L = { cur: null, gcur: null };
-  const mkv = () => { const v = document.createElement("video"); v.playsInline = true; v.preload = "auto"; v.disablePictureInPicture = true; v.addEventListener("loadeddata", () => { if (L.v === v && !P.playing) syncMedia(true); }); return v; };
-  const wrap = document.createElement("div"); wrap.className = "layer"; wrap.style.zIndex = i + 1;
-  const vs = [mkv(), mkv()]; vs[1].style.display = "none";
-  const img = document.createElement("img");
-  const vig = document.createElement("div"); vig.className = "vig";
-  const bars = document.createElement("div"); bars.className = "bars";
-  const fxv = [0, 1].map(() => { const f = document.createElement("video"); f.className = "fxv"; f.muted = true; f.loop = true; f.playsInline = true; f.style.display = "none"; return f; });
-  const main = document.createElement("div"); main.className = "mn"; main.append(vs[0], vs[1], img, vig, bars, ...fxv);
-  const gv = document.createElement("video"); gv.playsInline = true; gv.preload = "auto"; gv.muted = true; gv.addEventListener("loadeddata", () => { if (!P.playing) syncMedia(true); });
-  const gi = document.createElement("img"), gh = document.createElement("div"); gh.className = "gh"; gh.append(gv, gi);
-  wrap.append(gh, main); $("layers").appendChild(wrap);
-  Object.assign(L, { wrap, main, gh, gv, gi, vs, v: vs[0], img, vig, bars, fxv });
-  layers.push(L);
-  if (i < 3) {
-    const mka = () => { const a = new Audio(); a.preload = "auto"; return a; };
-    const as = [mka(), mka()]; const A = { as, a: as[0], cur: null };
-    as.forEach(a => a.addEventListener("loadeddata", () => { if (A.a === a && !P.playing) syncMedia(true); }));
-    aEls.push(A);
+function releaseEl(el) {
+  try { el.pause(); } catch (e) {}
+  if (!el.getAttribute("src") && !el.dataset.src) return;
+  el.removeAttribute("src"); el.dataset.src = ""; el.dataset.pre = ""; try { el.load(); } catch (e) {}
+}
+// Lecteur vidéo/audio : en cas d'erreur de lecture, on recharge automatiquement (jusqu'à 2 fois)
+function guardMedia(el) {
+  el.addEventListener("loadeddata", () => { el._errs = 0; });
+  el.addEventListener("error", () => {
+    if (!el.dataset.src) return;
+    el._errs = (el._errs || 0) + 1;
+    if (el._errs <= 2) setTimeout(() => { el.removeAttribute("src"); el.dataset.src = ""; try { el.load(); } catch (x) {} syncMedia(true); }, 400);
+    else setStatus("Impossible de lire ce média dans l'aperçu : essayez le bouton Actualiser.");
+  });
+}
+function buildPlayers() {
+  layers.forEach(L => { [...L.vs, L.gv, ...L.fxv].forEach(releaseEl); });
+  aEls.forEach(A => A.as.forEach(releaseEl));
+  $("layers").innerHTML = ""; layers.length = 0; aEls.length = 0;
+  for (let i = 0; i < 4; i++) {
+    const L = { cur: null, gcur: null };
+    const mkv = () => { const v = document.createElement("video"); v.playsInline = true; v.preload = "auto"; v.disablePictureInPicture = true; v.addEventListener("loadeddata", () => { if (L.v === v && !P.playing) syncMedia(true); }); guardMedia(v); return v; };
+    const wrap = document.createElement("div"); wrap.className = "layer"; wrap.style.zIndex = i + 1;
+    const vs = [mkv(), mkv()]; vs[1].style.display = "none";
+    const img = document.createElement("img");
+    const vig = document.createElement("div"); vig.className = "vig";
+    const bars = document.createElement("div"); bars.className = "bars";
+    const fxv = [0, 1].map(() => { const f = document.createElement("video"); f.className = "fxv"; f.muted = true; f.loop = true; f.playsInline = true; f.style.display = "none"; return f; });
+    const main = document.createElement("div"); main.className = "mn"; main.append(vs[0], vs[1], img, vig, bars, ...fxv);
+    const gv = document.createElement("video"); gv.playsInline = true; gv.preload = "auto"; gv.muted = true; gv.addEventListener("loadeddata", () => { if (!P.playing) syncMedia(true); }); guardMedia(gv);
+    const gi = document.createElement("img"), gh = document.createElement("div"); gh.className = "gh"; gh.append(gv, gi);
+    wrap.append(gh, main); $("layers").appendChild(wrap);
+    Object.assign(L, { wrap, main, gh, gv, gi, vs, v: vs[0], img, vig, bars, fxv });
+    layers.push(L);
+    if (i < 3) {
+      const mka = () => { const a = new Audio(); a.preload = "auto"; guardMedia(a); return a; };
+      const as = [mka(), mka()]; const A = { as, a: as[0], cur: null };
+      as.forEach(a => a.addEventListener("loadeddata", () => { if (A.a === a && !P.playing) syncMedia(true); }));
+      aEls.push(A);
+    }
   }
 }
+buildPlayers();
 
 // Lecture d'un élément média calé sur l'horloge du projet (synchronisation douce : pas de saccade)
 function drive(el, c, t, hard, mute) {
@@ -101,7 +122,9 @@ function preloadAhead(t) {
       const A = n.trans ? prevAdj(n) : null;
       if (A && A.type === "video" && L.gcur !== A.id && L.gh.style.display === "none") { setSrc(L.gv, pv(A)); try { L.gv.currentTime = Math.max(0, A.inPoint + A.duration - 0.05); } catch (e) {} L.gcur = A.id; }
     }
+    if (!n) { const sb0 = L.vs[0] === L.v ? L.vs[1] : L.vs[0]; releaseEl(sb0); if (L.gh.style.display === "none") { releaseEl(L.gv); L.gcur = null; } }
     const na = i < 3 ? nextClip("audio", i, t, ["audio"]) : null, Au = aEls[i];
+    if (i < 3 && !na) releaseEl(Au.as[0] === Au.a ? Au.as[1] : Au.as[0]);
     if (na) {
       const sb = Au.as[0] === Au.a ? Au.as[1] : Au.as[0];
       if (sb.dataset.pre !== na.id) { sb.dataset.pre = na.id; setSrc(sb, pv(na)); try { sb.currentTime = na.inPoint; } catch (e) {} }
@@ -154,7 +177,13 @@ function syncMedia(force) {
   const t = P.t;
   for (let i = 0; i < 4; i++) {
     const L = layers[i], c = clipAt("video", i, t), hid = !!state.trackHidden[i], mute = !!state.trackMuted[i];
-    if (!c) { ps(L.wrap, "display", "none"); L.vs.forEach(v => { if (!v.paused) v.pause(); }); L.fxv.forEach(fv => { if (!fv.paused) fv.pause(); }); L.cur = null; continue; }
+    if (!c) {
+      ps(L.wrap, "display", "none"); L.fxv.forEach(fv => { if (!fv.paused) fv.pause(); }); L.cur = null;
+      const nx = nextClip("video", i, t, ["video"]);
+      L.vs.forEach(v => { if (!v.paused) v.pause(); if (!nx) releaseEl(v); });
+      if (!nx) { releaseEl(L.gv); L.gcur = null; }
+      continue;
+    }
     ps(L.wrap, "display", hid ? "none" : "block");
     if (isOv(c)) {
       if (!hid) {
@@ -185,7 +214,7 @@ function syncMedia(force) {
   }
   for (let i = 0; i < 3; i++) {
     const A = aEls[i], c = clipAt("audio", i, t), mute = !!state.audioMuted[i];
-    if (!c) { A.as.forEach(a => { if (!a.paused) a.pause(); }); A.cur = null; continue; }
+    if (!c) { A.cur = null; const na = nextClip("audio", i, t, ["audio"]); A.as.forEach(a => { if (!a.paused) a.pause(); if (!na) releaseEl(a); }); continue; }
     const switched = A.cur !== c.id; if (switched) takeStandbyAudio(A, c);
     A.cur = c.id; setSrc(A.a, pv(c));
     drive(A.a, c, t, force ? 0.05 : switched ? 0.2 : 0.45, mute);
@@ -869,7 +898,7 @@ function buildCaptions(r) {
     words.forEach(w => {
       if (cur) {
         const gap = w.start - cur.end, len = (cur.text + " " + w.word).length;
-        if (gap > 0.8 || len > (RATIOS[state.ratio] > 1.5 ? 38 : RATIOS[state.ratio] > 0.95 ? 30 : 24) || w.end - cur.start > 3.8 || (/[.!?…]$/.test(cur.text) && cur.text.length > 12) || (/[,;:]$/.test(cur.text) && cur.text.length > 24)) flush();
+        if (gap > 0.8 || len > 2 * capLineMax() || w.end - cur.start > 3.8 || (/[.!?…]$/.test(cur.text) && cur.text.length > 12) || (/[,;:]$/.test(cur.text) && cur.text.length > 24)) flush();
       }
       if (!cur) cur = { start: w.start, end: w.end, text: w.word }; else { cur.text += " " + w.word; cur.end = w.end; }
     });
@@ -884,6 +913,42 @@ function buildCaptions(r) {
   caps.forEach((c, i) => { const next = caps[i + 1]; c.end = Math.max(c.start + 0.4, Math.min(c.end + 0.1, next ? next.start : c.end + 0.1)); });
   return caps;
 }
+const capLineMax = () => { const ar = RATIOS[state.ratio]; return ar > 1.5 ? 38 : ar > 0.95 ? 26 : 22; };
+// Coupe un texte en 2 lignes équilibrées (chaque ligne ≤ maxLine caractères)
+function wrapTwoLines(text, maxLine) {
+  text = String(text).replace(/\s+/g, " ").trim();
+  if (text.length <= maxLine) return text;
+  const w = text.split(" "); let best = null;
+  for (let i = 1; i < w.length; i++) {
+    const a = w.slice(0, i).join(" "), b = w.slice(i).join(" ");
+    if (a.length <= maxLine && b.length <= maxLine) { const d = Math.abs(a.length - b.length); if (!best || d < best.d) best = { a, b, d }; }
+  }
+  if (best) return best.a + "\n" + best.b;
+  const mid = Math.max(1, Math.floor(w.length / 2)); return w.slice(0, mid).join(" ") + "\n" + w.slice(mid).join(" ");
+}
+// Vrai si le texte peut tenir sur 2 lignes de maxLine caractères au plus
+function fitsTwoLines(t, maxLine) {
+  if (t.length <= maxLine) return true;
+  const w = t.split(" ");
+  for (let i = 1; i < w.length; i++) if (w.slice(0, i).join(" ").length <= maxLine && w.slice(i).join(" ").length <= maxLine) return true;
+  return false;
+}
+// Une légende trop longue est découpée en plusieurs légendes de 2 lignes maximum (durée répartie)
+function chunkCaption(cp, maxLine) {
+  const text = String(cp.text).replace(/\s+/g, " ").trim();
+  if (fitsTwoLines(text, maxLine)) return [{ start: cp.start, end: cp.end, text: wrapTwoLines(text, maxLine) }];
+  const words = text.split(" "), chunks = []; let cur = "";
+  words.forEach(w => { if (cur && !fitsTwoLines(cur + " " + w, maxLine)) { chunks.push(cur); cur = w; } else cur = cur ? cur + " " + w : w; });
+  if (cur) chunks.push(cur);
+  const total = chunks.reduce((n, c) => n + c.length, 0), dur = cp.end - cp.start; let t = cp.start;
+  return chunks.map(c => { const d = dur * c.length / total, o = { start: t, end: t + d, text: wrapTwoLines(c, maxLine) }; t += d; return o; });
+}
+// Taille maximale pour que la légende reste entièrement dans le cadre (jamais de débordement)
+function capFit(c, base) {
+  const sz = SIZES["1080"][state.ratio], ms = Math.min(sz[0], sz[1]);
+  const byW = Math.floor(0.9 * sz[0] * 1080 * 100 / ((c.srcW || 1) * ms)), byH = Math.floor(0.3 * sz[1] * 1080 * 100 / ((c.srcH || 1) * ms));
+  return Math.max(12, Math.min(base == null ? 54 : base, byW, byH));
+}
 const capY = () => { const portrait = RATIOS[state.ratio] < 1, p = state.capPos || "bottom"; return p === "top" ? (portrait ? -30 : -38) : p === "mid" ? 0 : (portrait ? 30 : 38); };
 function newTextClip(text, ts, start, dur, track, extra) {
   const r = EcomText.render(text, ts);
@@ -891,7 +956,8 @@ function newTextClip(text, ts, start, dur, track, extra) {
     scale: 60, x: 0, y: 22, volume: 100, hasAudio: false, proxy: "", thumb: "", fit: "fit", fx: [], adj: {}, srcW: r.w, srcH: r.h, text, ts: JSON.parse(JSON.stringify(ts)), img: r.url, imgVer: 1, anim: "none", env: false }, extra || {});
 }
 // Crée un clip texte par légende (piste CC), comme dans CapCut
-async function addCaptionClips(caps, progress) {
+async function addCaptionClips(caps0, progress) {
+  const caps = []; caps0.forEach(cp => caps.push(...chunkCaption(cp, capLineMax())));
   const style = EcomText.CAPTION_BY[state.capStyle] || EcomText.CAPTION_STYLES[0], y = capY();
   state.clips = state.clips.filter(c => !c.cap);
   for (let i = 0; i < caps.length; i++) {
@@ -899,7 +965,7 @@ async function addCaptionClips(caps, progress) {
     let end = cp.end; if (nxt && end > nxt.start) end = Math.max(cp.start + 0.1, nxt.start);
     const dur = Math.max(0.1, end - cp.start);
     let track = [3, 2, 1, 0].find(tr => !overlaps({ kind: "video" }, tr, cp.start, dur)); if (track == null) track = 3;
-    state.clips.push(newTextClip(cp.text, style.ts, cp.start, dur, track, { cap: true, scale: 54, y }));
+    const nc = newTextClip(cp.text, style.ts, cp.start, dur, track, { cap: true, scale: 54, y }); nc.scale = capFit(nc, 54); state.clips.push(nc);
     if (i % 8 === 7) { if (progress) progress(i + 1, caps.length); await new Promise(r => setTimeout(r, 0)); }
   }
 }
@@ -907,13 +973,13 @@ async function addCaptionClips(caps, progress) {
 function migrateCaptions() {
   if (!state.captions || !state.captions.length) { state.captions = []; return; }
   const style = EcomText.CAPTION_BY[state.capStyle] || EcomText.CAPTION_STYLES[0];
-  state.captions.forEach(cp => { const dur = Math.max(0.1, cp.end - cp.start); state.clips.push(newTextClip(cp.text, style.ts, cp.start, dur, 3, { cap: true, scale: 54, y: capY() })); });
+  state.captions.forEach(cp => { chunkCaption(cp, capLineMax()).forEach(q => { const dur = Math.max(0.1, q.end - q.start), nc = newTextClip(q.text, style.ts, q.start, dur, 3, { cap: true, scale: 54, y: capY() }); nc.scale = capFit(nc, 54); state.clips.push(nc); }); });
   state.captions = [];
 }
 // Applique un style à toutes les légendes du projet
 async function applyCaptionStyle(ts, scale, y) {
   const list = state.clips.filter(c => c.cap);
-  list.forEach((c, i) => { c.ts = JSON.parse(JSON.stringify(ts)); if (scale != null) c.scale = scale; if (y != null) c.y = y; const r = EcomText.render(c.text, c.ts); c.img = r.url; c.srcW = r.w; c.srcH = r.h; c.imgVer = (c.imgVer || 0) + 1; });
+  list.forEach((c, i) => { c.ts = JSON.parse(JSON.stringify(ts)); if (y != null) c.y = y; const r = EcomText.render(c.text, c.ts); c.img = r.url; c.srcW = r.w; c.srcH = r.h; c.imgVer = (c.imgVer || 0) + 1; c.scale = capFit(c, scale == null ? 54 : scale); });
   renderTimeline(); renderProps(); syncMedia(true); updateSelBox(); setStatus(`Style appliqué à ${list.length} légendes`);
 }
 async function generateCaptions() {
@@ -935,26 +1001,117 @@ async function generateCaptions() {
   if (currentPanel === "captions") { showPanel("captions"); $("capLang").value = lang; $("capSrc").value = src; $("capMsg").textContent = caps.length ? "✔ Légendes ajoutées à la piste CC. Cliquez sur une légende dans la timeline pour la modifier." : "Aucune parole détectée."; }
 }
 
-/* ---------- Projets ---------- */
-async function saveProject() {
-  const f = await window.ecom.saveProject({ app: "EcomVideoStudio", version: 2, state: { ...state, selected: null } });
-  if (f) setStatus("Projet enregistré : " + f);
+/* ---------- Thème clair / sombre ---------- */
+const ICO_SUN = `<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>`, ICO_MOON = `<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z"/></svg>`;
+function setTheme(t) {
+  t = t === "light" ? "light" : "dark";
+  document.documentElement.dataset.theme = t;
+  try { localStorage.setItem("ecom-theme", t); } catch (e) {}
+  $("themeBtn").innerHTML = t === "light" ? ICO_MOON : ICO_SUN;
+  $("themeBtn").title = t === "light" ? "Passer en mode sombre" : "Passer en mode clair";
 }
-async function openProject() {
-  const d = await window.ecom.loadProject();
-  if (!d || !d.state) return setStatus("Projet illisible ou annulé.");
-  pause(); state = { ...freshState(), ...d.state, selected: null };
+
+/* ---------- Projets : accueil, enregistrement automatique (15 s), actualisation ---------- */
+let editing = false, lastSavedJson = "";
+const pad2 = n => String(n).padStart(2, "0");
+const clock = d => `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+function defaultName() { const d = new Date(); return (EcomI18n.lang() === "en" ? "Project " : "Projet ") + `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`; }
+const newProjId = () => "p" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+// Contenu enregistré (les images de texte sont recréées à l'ouverture pour garder des fichiers légers)
+function snapshot() { return JSON.stringify({ app: "EcomVideoStudio", version: 3, state }, (k, v) => (k === "img" || k === "selected") ? undefined : v); }
+function projMeta() {
+  const vm = state.media.find(m => m.type === "video" && m.thumb), im = state.media.find(m => m.type === "image");
+  return { name: state.name, updated: Date.now(), duration: total(), clips: state.clips.length, ratio: state.ratio, cover: vm ? vm.thumb : im ? fileUrl(im.path) : "" };
+}
+function setSaveInfo(manual) {
+  const el = $("saveInfo"); if (!el) return;
+  el.textContent = (manual ? "Projet enregistré : " : "Enregistrement automatique : ") + clock(new Date());
+  el.classList.add("flash"); setTimeout(() => el.classList.remove("flash"), 1200);
+}
+async function saveNow(manual) {
+  if (!editing || !state.id) return;
+  const json = snapshot();
+  if (json !== lastSavedJson || manual) {
+    const ok = await window.ecom.projSave(state.id, projMeta(), json);
+    if (!ok) { setStatus("Échec de l'enregistrement du projet."); return; }
+    lastSavedJson = json;
+  }
+  setSaveInfo(manual);
+}
+setInterval(() => { if (editing) saveNow(false); }, 15000);          // enregistrement automatique toutes les 15 secondes
+window.addEventListener("beforeunload", () => { if (editing && state.id) { try { window.ecom.projSaveSync(state.id, projMeta(), snapshot()); } catch (e) {} } });
+
+function resetEditorUI() {
+  $("zoom").value = state.pps; applyRatio(); showPanel(currentPanel); renderTimeline(); renderProps(); syncMedia(true); preloadAhead(P.t); updateUI();
+}
+function enterEditor() {
+  editing = true; document.body.classList.remove("home-mode");
+  $("projName").value = state.name; lastSavedJson = snapshot(); setSaveInfo(false);
+  resetEditorUI();
+}
+async function showHome() {
+  if (editing) { pause(); await saveNow(false); }
+  editing = false; document.body.classList.add("home-mode"); renderHome();
+}
+async function renderHome() {
+  const list = await window.ecom.projList(), dir = await window.ecom.projDir();
+  $("homePath").textContent = "Dossier : " + dir;
+  const loc = EcomI18n.lang() === "en" ? "en-GB" : "fr-FR";
+  $("homeList").innerHTML = list.length ? list.map(p => {
+    const d = new Date(p.updated || 0).toLocaleString(loc, { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+    const cover = p.cover ? `style="background-image:url('${String(p.cover).replace(/'/g, "%27")}')"` : "";
+    return `<div class="pcard" data-pid="${esc(p.id)}"><div class="pcover" ${cover}>${p.cover ? "" : '<img src="logo.png" alt="">'}</div><div class="pmeta"><b>${esc(p.name)}</b><small>${d} • ${fmt(p.duration)} • ${p.clips || 0} clips • ${esc(p.ratio || "")}</small></div><button class="pdel" data-pdel="${esc(p.id)}" title="Supprimer le projet"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6"/></svg></button></div>`;
+  }).join("") : `<div class="home-empty">Aucun projet pour le moment. Cliquez sur « Nouveau projet » pour commencer.</div>`;
+}
+async function deleteProject(id) {
+  if (!(await askYesNo("Supprimer le projet", "Voulez-vous vraiment supprimer ce projet ? Les vidéos d'origine ne sont pas supprimées."))) return;
+  await window.ecom.projDelete(id); renderHome();
+}
+// Applique un état chargé (complète les champs manquants des anciens projets)
+async function loadState(st, id) {
+  pause(); state = { ...freshState(), ...st, selected: null };
+  if (id) state.id = id;
   state.ratio = RATIOS[state.ratio] ? state.ratio : "16:9";
+  if (!state.name) state.name = defaultName();
   (state.media || []).forEach(m => { m.proxy = ""; m.proxyTried = false; });
-  (state.clips || []).forEach(c => { c.proxy = ""; if (c.type === "sticker" && c.stickerId) c.path = stickerPath(c.stickerId); c.fx = c.fx || []; if (c.type === "text" && !c.ts) c.ts = Object.assign({}, EcomText.BASE); c.scale = c.scale || 100; c.x = c.x || 0; c.y = c.y || 0; c.volume = c.volume == null ? 100 : c.volume; });
+  (state.clips || []).forEach(c => { c.proxy = ""; if (c.type === "sticker" && c.stickerId) c.path = stickerPath(c.stickerId); c.fx = c.fx || []; c.adj = c.adj || {}; if (c.type === "text" && !c.ts) c.ts = Object.assign({}, EcomText.BASE); c.scale = c.scale || 100; c.x = c.x || 0; c.y = c.y || 0; c.volume = c.volume == null ? 100 : c.volume; });
   const pad = (a, n) => { a = (a || []).slice(); while (a.length < n) a.push(false); return a; };
   state.trackHidden = pad(state.trackHidden, 4); state.trackMuted = pad(state.trackMuted, 4); state.audioMuted = pad(state.audioMuted, 3); state.capStyle = state.capStyle || "classic"; state.capPos = state.capPos || "bottom";
   migrateCaptions();
-  P.t = 0; $("zoom").value = state.pps; applyRatio(); showPanel(currentPanel); renderTimeline(); (state.media || []).forEach(ensureProxy); syncMedia(true); updateUI(); setStatus("Projet chargé");
+  P.t = 0;
+  const texts = state.clips.filter(c => c.type === "text" && !c.img);
+  for (let i = 0; i < texts.length; i++) { regenText(texts[i]); if (i % 12 === 11) { setStatus(`Chargement des textes… ${i + 1}/${texts.length}`); await new Promise(r => setTimeout(r, 0)); } }
+  (state.media || []).forEach(ensureProxy);
 }
-function newProject() {
-  if (state.clips.length && !confirm(EcomI18n.t("Créer un nouveau projet ? Les modifications non enregistrées seront perdues."))) return;
-  pause(); state = freshState(); P.t = 0; applyRatio(); showPanel(currentPanel); renderTimeline(); syncMedia(true); updateUI();
+async function openProjectById(id) {
+  const j = await window.ecom.projLoad(id);
+  let d = null; try { d = JSON.parse(j); } catch (e) {}
+  if (!d || !d.state) { setStatus("Projet introuvable ou illisible."); return; }
+  await loadState(d.state, id); enterEditor(); setStatus("Projet chargé");
+}
+async function createProject() {
+  pause(); state = freshState(); state.id = newProjId(); state.created = Date.now(); state.name = defaultName(); P.t = 0;
+  await window.ecom.projSave(state.id, projMeta(), snapshot());
+  enterEditor(); setStatus("Nouveau projet créé");
+}
+async function importProjectFile() {
+  const d = await window.ecom.loadProject();
+  if (!d || !d.state) return setStatus("Projet illisible ou annulé.");
+  await loadState(d.state, newProjId()); state.name = (d.state.name || defaultName());
+  await window.ecom.projSave(state.id, projMeta(), snapshot());
+  enterEditor(); setStatus("Projet chargé");
+}
+// Actualiser : comme fermer puis rouvrir le projet (recrée les lecteurs vidéo/audio et réaffiche tout)
+async function refreshProject() {
+  if (!editing) return;
+  const t = P.t, sel = state.selected; pause();
+  await saveNow(false);
+  buildPlayers(); lastPre = -9; pendingProxy.length = 0;
+  state.media.forEach(m => { m.proxyTried = false; });
+  state.clips.forEach(c => { if (c.type === "text" && !c.img) regenText(c); });
+  resetEditorUI(); state.media.forEach(ensureProxy);
+  state.selected = sel; renderTimeline(); renderProps(); seek(t);
+  setStatus("Projet actualisé");
 }
 
 /* ---------- Export ---------- */
@@ -987,7 +1144,13 @@ $("deleteBtn").onclick = deleteSelected;
 $("addAudioTrack").onclick = addAudioTrack;
 $("zoom").oninput = e => { state.pps = +e.target.value; renderTimeline(); };
 $("scrub").onclick = e => { const r = $("scrub").getBoundingClientRect(); seek(((e.clientX - r.left) / r.width) * total()); };
-$("newBtn").onclick = newProject; $("openProject").onclick = openProject; $("saveProject").onclick = saveProject;
+$("saveProject").onclick = () => saveNow(true);
+$("homeBtn").onclick = showHome; $("refreshBtn").onclick = refreshProject; $("themeBtn").onclick = () => setTheme(document.documentElement.dataset.theme === "light" ? "dark" : "light");
+$("homeNew").onclick = createProject; $("homeOpen").onclick = importProjectFile; $("homeFolder").onclick = () => window.ecom.openFolder();
+$("homeList").onclick = e => { const d = e.target.closest("[data-pdel]"); if (d) { e.stopPropagation(); deleteProject(d.dataset.pdel); return; } const c = e.target.closest(".pcard"); if (c) openProjectById(c.dataset.pid); };
+$("projName").oninput = e => { state.name = e.target.value; };
+$("projName").onblur = e => { if (!state.name.trim()) { state.name = defaultName(); e.target.value = state.name; } };
+$("projName").onkeydown = e => { if (e.key === "Enter") e.target.blur(); };
 $("exportBtn").onclick = openExport; $("cancelExport").onclick = () => $("exportModal").classList.add("hidden"); $("doExport").onclick = doExport;
 document.querySelectorAll(".quality-grid button").forEach(b => b.onclick = () => { document.querySelectorAll(".quality-grid button").forEach(x => x.classList.remove("selected")); b.classList.add("selected"); resolution = b.dataset.res; });
 document.querySelectorAll("#ratioGroup button").forEach(b => b.onclick = () => { state.ratio = b.dataset.ratio; applyRatio(); setStatus("Format " + state.ratio); });
@@ -1016,7 +1179,7 @@ window.addEventListener("dragover", e => e.preventDefault());
 window.addEventListener("drop", e => e.preventDefault());
 document.addEventListener("mouseup", () => { const a = document.activeElement; if (a && a.type === "range") a.blur(); });
 window.addEventListener("keydown", e => {
-  if (!$("confirmModal").classList.contains("hidden")) return;
+  if (document.body.classList.contains("home-mode") || !$("confirmModal").classList.contains("hidden")) return;
   if (/INPUT|SELECT|TEXTAREA/.test(e.target.tagName) && e.target.type !== "range") return;
   if (e.code === "ArrowLeft" || e.code === "ArrowRight") {
     e.preventDefault();
@@ -1039,7 +1202,10 @@ function setLanguage(l, persist) {
   EcomI18n.setLang(l); if (persist) window.ecom.setLang(l);
   document.documentElement.lang = l;
   document.querySelectorAll("#langSw button").forEach(b => b.classList.toggle("on", b.dataset.lang === l));
-  showPanel(currentPanel); renderTimeline(); renderProps(); updateUI();
+  showPanel(currentPanel); renderTimeline(); renderProps(); updateUI(); setTheme(document.documentElement.dataset.theme); if (!editing) renderHome();
 }
 document.querySelectorAll("#langSw button").forEach(b => b.onclick = () => setLanguage(b.dataset.lang, true));
 window.ecom.getLang().then(l => setLanguage(l, false));
+
+setTheme(document.documentElement.dataset.theme || "dark");
+renderHome();

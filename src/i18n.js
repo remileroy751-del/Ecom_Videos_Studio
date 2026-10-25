@@ -115,6 +115,15 @@
     "Création des légendes… {0}/{1}": "Creating captions… {0}/{1}", "{0} légendes ajoutées au projet": "{0} captions added to the project", "Style appliqué à {0} légendes": "Style applied to {0} captions",
     "✔ Légendes ajoutées à la piste CC. Cliquez sur une légende dans la timeline pour la modifier.": "✔ Captions added to the CC track. Click a caption on the timeline to edit it.",
     "Cette piste est réservée aux textes et aux légendes.": "This track is reserved for texts and captions.",
+    /* --- v1.7 : accueil, projets, thème, actualisation --- */
+    "Accueil": "Home", "Retour à l'accueil": "Back to home", "Nom du projet": "Project name", "Mode clair / sombre": "Light / dark mode",
+    "Actualiser le projet (réaffiche tout l'aperçu)": "Refresh the project (re-displays the whole preview)", "Passer en mode sombre": "Switch to dark mode", "Passer en mode clair": "Switch to light mode",
+    "Nouveau projet": "New project", "Commencer un nouveau montage vidéo": "Start a new video edit", "Projets récents": "Recent projects", "Ouvrir un fichier": "Open a file", "Ouvrir le dossier": "Open the folder",
+    "Aucun projet pour le moment. Cliquez sur « Nouveau projet » pour commencer.": "No projects yet. Click “New project” to get started.", "Dossier : {0}": "Folder: {0}",
+    "Supprimer le projet": "Delete project", "Voulez-vous vraiment supprimer ce projet ? Les vidéos d'origine ne sont pas supprimées.": "Do you really want to delete this project? The original videos are not deleted.",
+    "Enregistrement automatique : {0}": "Auto-saved: {0}", "Échec de l'enregistrement du projet.": "Failed to save the project.", "Projet introuvable ou illisible.": "Project not found or unreadable.",
+    "Nouveau projet créé": "New project created", "Projet actualisé": "Project refreshed", "Chargement des textes… {0}/{1}": "Loading texts… {0}/{1}",
+    "Impossible de lire ce média dans l'aperçu : essayez le bouton Actualiser.": "Cannot play this media in the preview: try the Refresh button.",
     /* --- projets --- */
     "Projet enregistré : {0}": "Project saved: {0}", "Projet chargé": "Project loaded", "Projet illisible ou annulé.": "Project unreadable or cancelled.",
     "Créer un nouveau projet ? Les modifications non enregistrées seront perdues.": "Create a new project? Unsaved changes will be lost."

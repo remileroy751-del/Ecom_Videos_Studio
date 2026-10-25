@@ -1,5 +1,13 @@
-# EcomVideoStudio — v1.6.0
+# EcomVideoStudio — v1.7.0
 Logiciel desktop de montage vidéo pour Windows 10+ (Electron + FFmpeg).
+
+## Nouveautés v1.7.0 / What's new
+- **Page d'accueil façon CapCut** : un grand bouton **Nouveau projet** en haut, les projets précédents en dessous (un clic pour les rouvrir, corbeille pour les supprimer). Bouton **Accueil** dans l'éditeur.
+- **Dossier automatique** `Vidéos\EcomVideoStudio` (sous-dossiers `Projets` et `Exports`), créé au premier lancement qui suit l'installation. Les projets y sont enregistrés ; les exports proposent ce dossier par défaut.
+- **Enregistrement automatique toutes les 15 secondes**, avec l'heure affichée en haut du projet ; le nom du projet se modifie directement en haut.
+- **Mode clair / sombre** : bouton soleil/lune à côté du choix de langue (choix mémorisé).
+- **Bouton Actualiser** (flèches circulaires, en haut) : réinitialise l'aperçu et tous les lecteurs comme si le projet était fermé puis rouvert (utile si l'aperçu devient noir). Reprise automatique en cas d'erreur de lecture et libération des décodeurs inutilisés.
+- **Légendes sur 2 lignes** maximum, coupées automatiquement et ajustées pour ne plus déborder du cadre, quel que soit le format.
 
 ## Nouveautés v1.6.0 / What's new
 - **Réglages de l'image** (panneau de droite, pour une vidéo ou une photo) : contraste, luminosité, netteté, saturation — visibles en direct et appliqués à l'export.
