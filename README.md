@@ -1,5 +1,15 @@
-# EcomVideoStudio — v1.7.0
+# EcomVideoStudio — v1.8.0
 Logiciel desktop de montage vidéo pour Windows 10+ (Electron + FFmpeg).
+
+## Nouveautés v1.8.0 / What's new
+- **Raccourcis clavier** : **Ctrl+Z** annule jusqu'aux 10 dernières actions (Ctrl+Y ou Ctrl+Maj+Z pour rétablir) ; **K** coupe le clip sélectionné à la tête de lecture (vidéo, audio ou photo).
+- **Mode IA** (onglet sous Transitions, et bouton sur la page d'accueil) : crée un short vidéo 9:16 de 90 secondes maximum, étape par étape :
+  1. script de 900 caractères maximum lu par une voix off **féminine ou masculine** (voix Windows hors ligne, ou voix IA naturelles Gemini) — ou voix off enregistrée de 1 min 30 maximum ;
+  2. musique de fond choisie sur l'ordinateur (ou aucune), répétée si besoin ;
+  3. 4 images ou 4 vidéos au maximum (la première est répétée si la durée est plus courte que la voix off) ;
+  4. style (8 modèles) et position des sous-titres ;
+  5. « Créer la vidéo » : montage automatique avec transitions, progression de 0 à 100 %, puis « Terminé — Ouvrir le dossier ». La vidéo est enregistrée dans `Vidéos\EcomVideoStudio\Exports` et le projet dans la liste des projets.
+- Voix Windows : pour le français, installez une voix française dans les paramètres Windows (Heure et langue > Voix) si elle n'est pas déjà présente ; sinon utilisez les voix IA Gemini (clé gratuite).
 
 ## Nouveautés v1.7.0 / What's new
 - **Page d'accueil façon CapCut** : un grand bouton **Nouveau projet** en haut, les projets précédents en dessous (un clic pour les rouvrir, corbeille pour les supprimer). Bouton **Accueil** dans l'éditeur.

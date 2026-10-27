@@ -56,7 +56,12 @@ function probe(file) {
 }
 
 // ---------- Projets / fichiers ----------
-ipcMain.handle("open-media", async () => {
+const EXT = { video: ["mp4", "mov", "mkv", "avi", "webm", "m4v", "wmv", "flv", "mpeg", "mpg", "3gp"], image: ["jpg", "jpeg", "png", "webp", "bmp", "gif"], audio: ["mp3", "wav", "aac", "m4a", "ogg", "flac"] };
+ipcMain.handle("open-media", async (_, kind) => {
+  if (kind === "audio" || kind === "visual") {
+    const r = await dialog.showOpenDialog(win, { properties: kind === "visual" ? ["openFile", "multiSelections"] : ["openFile"], filters: [{ name: M("media"), extensions: kind === "audio" ? EXT.audio : EXT.video.concat(EXT.image) }] });
+    return r.canceled ? [] : r.filePaths;
+  }
   const r = await dialog.showOpenDialog(win, {
     properties: ["openFile", "multiSelections"],
     filters: [{ name: M("media"), extensions: ["mp4", "mov", "mkv", "avi", "webm", "m4v", "wmv", "flv", "mpeg", "mpg", "3gp", "jpg", "jpeg", "png", "webp", "bmp", "gif", "mp3", "wav", "aac", "m4a", "ogg", "flac"] }]
@@ -191,6 +196,7 @@ const MSG = {
     badKey: "Clé API refusée. Vérifiez la clé enregistrée. ", err: "Erreur {code} : ", badJson: "Réponse inattendue du service de transcription.",
     retryCaps: "\nLes légendes n'ont pas pu être incrustées, nouvel essai sans légendes…\n", warnCaps: "Export terminé, mais sans les légendes incrustées (moteur vidéo incompatible).",
     retryStk: "\nAnimation des stickers non supportée, nouvel essai avec des stickers fixes…\n", warnStk: "Export terminé, mais les stickers sont fixes (animation non supportée par le moteur vidéo).",
+    noWinVoice: "Aucune voix Windows disponible pour cette langue. Choisissez les voix IA (Gemini) ou installez une voix dans les paramètres Windows (Heure et langue > Voix).", ttsFail: "Échec de la synthèse vocale :",
     retryFx: "\nUn effet n'est pas supporté par le moteur vidéo, nouvel essai sans effets…\n", warnFx: "Export terminé, mais sans les effets (non supportés par le moteur vidéo).",
     retryTr: "\nUne transition n'est pas supportée par le moteur vidéo, nouvel essai sans transitions…\n", warnTr: "Export terminé, mais sans les transitions (non supportées par le moteur vidéo)." },
   en: { media: "Media", project: "EcomVideoStudio project", saveProject: "Save project", exportVideo: "Export video", videoMp4: "MP4 video",
@@ -199,6 +205,7 @@ const MSG = {
     badKey: "API key rejected. Check the saved key. ", err: "Error {code}: ", badJson: "Unexpected response from the transcription service.",
     retryCaps: "\nCaptions could not be burned in, retrying without captions…\n", warnCaps: "Export finished, but without burned-in captions (incompatible video engine).",
     retryStk: "\nSticker animation not supported, retrying with static stickers…\n", warnStk: "Export finished, but stickers are static (animation not supported by the video engine).",
+    noWinVoice: "No Windows voice available for this language. Choose the AI voices (Gemini) or install a voice in Windows settings (Time & language > Speech).", ttsFail: "Speech synthesis failed:",
     retryFx: "\nAn effect is not supported by the video engine, retrying without effects…\n", warnFx: "Export finished, but without effects (not supported by the video engine).",
     retryTr: "\nA transition is not supported by the video engine, retrying without transitions…\n", warnTr: "Export finished, but without transitions (not supported by the video engine)." }
 };
@@ -343,4 +350,108 @@ ipcMain.handle("transcribe", async (_, o) => {
   } finally {
     try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (e) {}
   }
+});
+
+
+// ---------- Mode IA : voix off (synthèse vocale), détection des silences, chemins ----------
+const voicesDir = () => path.join(baseDir(), "Voix");
+ipcMain.handle("next-export-path", (_, prefix) => {
+  ensureFolders();
+  const d = new Date(), p2 = n => String(n).padStart(2, "0");
+  const stamp = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}`;
+  return path.join(exportDir(), `${String(prefix || "Export").replace(/[^A-Za-z0-9_-]/g, "")}-${stamp}.mp4`);
+});
+ipcMain.handle("reveal-file", (_, f) => { try { if (f && fs.existsSync(f)) shell.showItemInFolder(f); else shell.openPath(exportDir()); } catch (e) {} return true; });
+
+// Silences d'un fichier audio (sert à caler les sous-titres sur la voix)
+ipcMain.handle("detect-silence", async (_, file) => {
+  let txt = "";
+  await runFF(["-hide_banner", "-i", file, "-af", "silencedetect=noise=-32dB:d=0.18", "-f", "null", "-"], { onData: s => { txt += s; } });
+  const sil = [], re = /silence_start: (-?[\d.]+)|silence_end: ([\d.]+)/g; let m, cur = null;
+  while ((m = re.exec(txt))) { if (m[1] !== undefined) cur = { start: Math.max(0, parseFloat(m[1])), end: null }; else if (cur) { cur.end = parseFloat(m[2]); sil.push(cur); cur = null; } }
+  if (cur) { const d = /Duration:\s*(\d+):(\d+):([\d.]+)/.exec(txt); cur.end = d ? (+d[1]) * 3600 + (+d[2]) * 60 + parseFloat(d[3]) : cur.start; sil.push(cur); }
+  const d = /Duration:\s*(\d+):(\d+):([\d.]+)/.exec(txt);
+  return { silences: sil, duration: d ? (+d[1]) * 3600 + (+d[2]) * 60 + parseFloat(d[3]) : 0 };
+});
+
+// Voix Windows (hors ligne) : System.Speech via PowerShell
+function psRun(scriptBody, args) {
+  return new Promise(resolve => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ecomvs-ps-")), f = path.join(tmp, "s.ps1");
+    fs.writeFileSync(f, scriptBody, "utf8");
+    let out = "", err = "", p;
+    try { p = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", f, ...args], { windowsHide: true }); }
+    catch (e) { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (x) {} return resolve({ code: -1, out: "", err: String(e.message) }); }
+    p.stdout.on("data", d => { out += d; }); p.stderr.on("data", d => { err += d; });
+    p.on("error", e => resolve({ code: -1, out, err: e.message }));
+    p.on("close", code => { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (e) {} resolve({ code, out, err }); });
+  });
+}
+const PS_LIST = `Add-Type -AssemblyName System.Speech
+$s = New-Object System.Speech.Synthesis.SpeechSynthesizer
+$v = @($s.GetInstalledVoices() | Where-Object { $_.Enabled } | ForEach-Object { [pscustomobject]@{ name = $_.VoiceInfo.Name; culture = $_.VoiceInfo.Culture.Name; gender = $_.VoiceInfo.Gender.ToString() } })
+$s.Dispose()
+ConvertTo-Json -InputObject $v -Compress`;
+const PS_SPEAK = `param([string]$TextFile,[string]$Out,[string]$Lang,[string]$Gender)
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Speech
+$s = New-Object System.Speech.Synthesis.SpeechSynthesizer
+$all = @($s.GetInstalledVoices() | Where-Object { $_.Enabled } | ForEach-Object { $_.VoiceInfo })
+if ($all.Count -eq 0) { throw 'NOVOICE' }
+$inLang = @($all | Where-Object { $_.Culture.Name.ToLower().StartsWith($Lang) })
+if ($inLang.Count -gt 0) { $pool = $inLang } else { $pool = $all }
+if ($Gender -eq 'male') { $g = 'Male' } else { $g = 'Female' }
+$match = @($pool | Where-Object { $_.Gender.ToString() -eq $g })
+$pitch = 'medium'
+if ($match.Count -gt 0) { $v = $match[0] } else { $v = $pool[0]; if ($g -eq 'Male') { $pitch = 'x-low' } else { $pitch = 'high' } }
+$text = [System.IO.File]::ReadAllText($TextFile, [System.Text.Encoding]::UTF8)
+$esc = [System.Security.SecurityElement]::Escape($text)
+$culture = $v.Culture.Name
+$vname = $v.Name.Replace("'", '')
+$ssml = "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='$culture'><voice name='$vname'><prosody pitch='$pitch'>$esc</prosody></voice></speak>"
+$s.SetOutputToWaveFile($Out)
+$s.SpeakSsml($ssml)
+$s.Dispose()
+Write-Output ('VOICE=' + $v.Name + '|' + $culture + '|' + $v.Gender + '|' + ($inLang.Count -gt 0))`;
+ipcMain.handle("tts-voices", async () => {
+  if (process.platform !== "win32") return { ok: false, voices: [] };
+  const r = await psRun(PS_LIST, []);
+  try { let v = JSON.parse(r.out.trim() || "[]"); if (!Array.isArray(v)) v = [v]; return { ok: true, voices: v }; } catch (e) { return { ok: false, voices: [], error: r.err.slice(0, 300) }; }
+});
+async function geminiSpeak(text, gender, outWav) {
+  const key = loadSettings().keys.gemini;
+  if (!key) throw new Error(M("noKey"));
+  const body = JSON.stringify({ contents: [{ parts: [{ text }] }], generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: gender === "male" ? "Puck" : "Kore" } } } } });
+  const j = await httpJson("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent", { method: "POST", headers: { "x-goog-api-key": key, "Content-Type": "application/json" }, body });
+  const parts = (((j.candidates || [])[0] || {}).content || {}).parts || [];
+  const part = parts.find(p => p.inlineData || p.inline_data), data = part && (part.inlineData || part.inline_data).data;
+  if (!data) throw new Error(M("badJson"));
+  const raw = outWav + ".pcm"; fs.writeFileSync(raw, Buffer.from(data, "base64"));
+  const r = await runFF(["-y", "-hide_banner", "-f", "s16le", "-ar", "24000", "-ac", "1", "-i", raw, outWav]);
+  try { fs.unlinkSync(raw); } catch (e) {}
+  if (r.code !== 0) throw new Error("FFmpeg: " + r.stderr.slice(-200));
+}
+// o : { text, lang: "fr"|"en", gender: "female"|"male", engine: "sapi"|"gemini", preview }
+ipcMain.handle("tts-synth", async (_, o) => {
+  const text = String(o.text || "").replace(/\s+/g, " ").trim().slice(0, o.preview ? 160 : 900);
+  if (!text) return { ok: false, error: "Texte vide." };
+  const gender = o.gender === "male" ? "male" : "female", lang = o.lang === "en" ? "en" : "fr";
+  let outDir = o.preview ? os.tmpdir() : voicesDir();
+  try { fs.mkdirSync(outDir, { recursive: true }); } catch (e) {}
+  const out = path.join(outDir, `${o.preview ? "ecomvs-apercu" : "voix"}-${Date.now()}.wav`);
+  try {
+    let info = "";
+    if (o.engine === "gemini") { await geminiSpeak(text, gender, out); info = gender === "male" ? "Puck" : "Kore"; }
+    else {
+      if (process.platform !== "win32") return { ok: false, error: M("noWinVoice") };
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ecomvs-tts-")), tf = path.join(tmp, "t.txt");
+      fs.writeFileSync(tf, text, "utf8");
+      const r = await psRun(PS_SPEAK, ["-TextFile", tf, "-Out", out, "-Lang", lang, "-Gender", gender]);
+      try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (e) {}
+      if (r.code !== 0 || !fs.existsSync(out)) return { ok: false, error: /NOVOICE/.test(r.err + r.out) ? M("noWinVoice") : (M("ttsFail") + " " + (r.err || r.out || "").slice(0, 300)) };
+      info = (/VOICE=(.*)/.exec(r.out) || [])[1] || "";
+    }
+    const pr = await probe(out);
+    return { ok: true, path: out, duration: pr.duration, voice: info };
+  } catch (e) { return { ok: false, error: e.message }; }
 });

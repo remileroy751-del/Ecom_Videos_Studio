@@ -17,6 +17,8 @@ let stickerDir = "", fxDir = "", fxCat = "all";
 const joinDir = (d, f) => { d = d.replace(/[\\/]+$/, ""); return d + (d.indexOf("\\") >= 0 ? "\\" : "/") + f; };
 const fxPath = id => joinDir(fxDir, "fx_" + id + ".mp4");
 const P = { t: 0, playing: false, last: 0 };
+let noProxy = false, ai = null, aiFrom = "home", aiVoices = null;
+const L2 = (fr, en) => (EcomI18n.lang() === "en" ? en : fr);
 let mediaFilter = "all", currentPanel = "media", resolution = "1080", capSettings = { provider: "groq", has: {} }, capBusy = false;
 
 const setStatus = m => { $("status").textContent = m; };
@@ -313,7 +315,7 @@ function updateUI(follow) {
 function typeOfPath(p) { return IMG_EXT.test(p) ? "image" : AUD_EXT.test(p) ? "audio" : VID_EXT.test(p) ? "video" : null; }
 // Copie légère (540p, images clés fréquentes) pour une lecture fluide des vidéos lourdes ; l'export utilise toujours l'original
 function ensureProxy(m) {
-  if (m.type !== "video" || m.proxy || m.proxyTried || Math.max(m.width || 0, m.height || 0) <= 960) return;
+  if (noProxy || m.type !== "video" || m.proxy || m.proxyTried || Math.max(m.width || 0, m.height || 0) <= 960) return;
   m.proxyTried = true;
   setStatus(`Optimisation de la lecture de « ${m.name} »…`);
   window.ecom.makeProxy(m.path).then(p => {
@@ -995,11 +997,54 @@ async function generateCaptions() {
   if (!r.ok) { capBusy = false; if ($("capMsg")) { $("capGen").disabled = false; $("capMsg").textContent = "❌ " + r.error; } return; }
   const caps = buildCaptions(r);
   await addCaptionClips(caps, (i, n) => { const m = $("capMsg"); if (m) m.textContent = `Création des légendes… ${i}/${n}`; });
-  capBusy = false; state.selected = null;
+  capBusy = false; state.selected = null; scheduleCommit();
   renderTimeline(); renderProps(); syncMedia(true); updateUI();
   setStatus(`${caps.length} légendes ajoutées au projet`);
   if (currentPanel === "captions") { showPanel("captions"); $("capLang").value = lang; $("capSrc").value = src; $("capMsg").textContent = caps.length ? "✔ Légendes ajoutées à la piste CC. Cliquez sur une légende dans la timeline pour la modifier." : "Aucune parole détectée."; }
 }
+
+/* ---------- Historique : Ctrl+Z (10 actions) ---------- */
+const HIST_MAX = 10;
+let undoStack = [], redoStack = [], lastSnap = "", histTimer = 0;
+function undoPart() {
+  return JSON.stringify({ media: state.media, clips: state.clips, audioTracks: state.audioTracks, ratio: state.ratio, trackHidden: state.trackHidden, trackMuted: state.trackMuted, audioMuted: state.audioMuted, capStyle: state.capStyle, capPos: state.capPos },
+    (k, v) => (k === "img" || k === "proxy" || k === "proxyTried") ? undefined : v);
+}
+function resetHistory() { clearTimeout(histTimer); undoStack = []; redoStack = []; lastSnap = undoPart(); }
+function commitHistory() {
+  if (!editing || document.body.classList.contains("ai-mode")) return;
+  const cur = undoPart(); if (cur === lastSnap) return;
+  undoStack.push(lastSnap); if (undoStack.length > HIST_MAX) undoStack.shift();
+  redoStack = []; lastSnap = cur;
+}
+function scheduleCommit() { clearTimeout(histTimer); histTimer = setTimeout(commitHistory, 350); }
+function applySnap(json) {
+  const o = JSON.parse(json); pause();
+  const oldClips = new Map(state.clips.map(c => [c.id, c])), oldMedia = new Map(state.media.map(m => [m.id, m]));
+  state.media = o.media; state.clips = o.clips;
+  ["audioTracks", "ratio", "trackHidden", "trackMuted", "audioMuted", "capStyle", "capPos"].forEach(k => { if (o[k] !== undefined) state[k] = o[k]; });
+  state.media.forEach(m => { const om = oldMedia.get(m.id); m.proxy = om ? om.proxy : ""; m.proxyTried = om ? om.proxyTried : false; });
+  state.clips.forEach(c => {
+    const m = state.media.find(x => x.id === c.mediaId); c.proxy = m ? m.proxy || "" : "";
+    if (c.type === "text") { const oc = oldClips.get(c.id); if (oc && oc.img && oc.imgVer === c.imgVer) c.img = oc.img; else regenText(c); }
+  });
+  if (state.selected && !state.clips.some(c => c.id === state.selected)) state.selected = null;
+  P.t = clamp(P.t, 0, total()); lastSnap = undoPart();
+  applyRatio(); renderMedia(); renderTimeline(); renderProps(); syncMedia(true); updateUI();
+}
+function undo() {
+  clearTimeout(histTimer); commitHistory();
+  if (!undoStack.length) return setStatus("Rien à annuler");
+  redoStack.push(lastSnap); applySnap(undoStack.pop());
+  setStatus(L2(`Action annulée (${undoStack.length} restante(s))`, `Action undone (${undoStack.length} left)`));
+}
+function redo() {
+  clearTimeout(histTimer); commitHistory();
+  if (!redoStack.length) return setStatus("Rien à rétablir");
+  undoStack.push(lastSnap); applySnap(redoStack.pop());
+  setStatus("Action rétablie");
+}
+["mouseup", "keyup", "change", "drop"].forEach(ev => document.addEventListener(ev, scheduleCommit));
 
 /* ---------- Thème clair / sombre ---------- */
 const ICO_SUN = `<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>`, ICO_MOON = `<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z"/></svg>`;
@@ -1047,7 +1092,7 @@ function resetEditorUI() {
 function enterEditor() {
   editing = true; document.body.classList.remove("home-mode");
   $("projName").value = state.name; lastSavedJson = snapshot(); setSaveInfo(false);
-  resetEditorUI();
+  resetEditorUI(); resetHistory();
 }
 async function showHome() {
   if (editing) { pause(); await saveNow(false); }
@@ -1119,24 +1164,319 @@ function openExport() {
   if (!state.clips.length) return setStatus("Ajoutez des clips à la timeline avant d'exporter.");
   pause(); const sz = q => SIZES[q][state.ratio][0] + "×" + SIZES[q][state.ratio][1]; $("exportInfo").textContent = `Format ${state.ratio} — 480p : ${sz("480")} • 720p : ${sz("720")} • 1080p : ${sz("1080")}`; $("exportLog").textContent = ""; $("expBar").classList.add("hidden"); $("expFill").style.width = "0"; $("exportModal").classList.remove("hidden");
 }
+function buildExportPayload(res, out) {
+  const video = state.clips.filter(c => c.kind === "video" && !state.trackHidden[c.track]).map(c => ({ path: c.path, type: c.type, track: c.track, start: c.start, inPoint: c.inPoint, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fit: c.fit, anim: c.anim, fx: c.fx || [], srcW: c.srcW || 0, srcH: c.srcH || 0, trans: c.trans || null, env: c.env, adj: c.adj || {}, img: c.type === "text" ? c.img : undefined }));
+  return { video, audio: audioSources("all"), total: total(), resolution: res, ratio: state.ratio, output: out, captions: [] };
+}
 async function doExport() {
   const out = await window.ecom.pickExportPath("EcomVideoStudio-export.mp4"); if (!out) return;
-  const T = total();
-  const video = state.clips.filter(c => c.kind === "video" && !state.trackHidden[c.track]).map(c => ({ path: c.path, type: c.type, track: c.track, start: c.start, inPoint: c.inPoint, duration: c.duration, scale: c.scale, x: c.x, y: c.y, fit: c.fit, anim: c.anim, fx: c.fx || [], srcW: c.srcW || 0, srcH: c.srcH || 0, trans: c.trans || null, env: c.env, adj: c.adj || {}, img: c.type === "text" ? c.img : undefined }));
   $("doExport").disabled = true; $("exportLog").textContent = "Export en cours…\n"; $("expBar").classList.remove("hidden");
-  const r = await window.ecom.exportVideo({ video, audio: audioSources("all"), total: T, resolution, ratio: state.ratio, output: out, captions: [] });
+  const r = await window.ecom.exportVideo(buildExportPayload(resolution, out));
   $("doExport").disabled = false;
   if (r.ok) { $("expFill").style.width = "100%"; $("exportLog").textContent = "✔ Export terminé :\n" + r.output + (r.warning ? "\n⚠ " + r.warning : ""); setStatus("Export terminé"); }
   else $("exportLog").textContent = "❌ Échec de l'export :\n" + r.error;
 }
 window.ecom.onExportProgress(s => {
   const m = [...s.matchAll(/time=(\d+):(\d+):(\d+(?:\.\d+)?)/g)].pop();
-  if (m) { const t = (+m[1]) * 3600 + (+m[2]) * 60 + parseFloat(m[3]); const p = clamp(Math.round((t / Math.max(total(), 0.1)) * 100), 0, 99); $("expFill").style.width = p + "%"; $("exportLog").textContent = "Export en cours… " + p + "%"; }
+  if (m) {
+    const t = (+m[1]) * 3600 + (+m[2]) * 60 + parseFloat(m[3]), p = clamp(Math.round((t / Math.max(total(), 0.1)) * 100), 0, 99);
+    if (ai && ai.exporting) { aiProg(45 + 0.55 * p, L2("Montage et export de la vidéo… ", "Editing and exporting the video… ") + p + "%"); return; }
+    $("expFill").style.width = p + "%"; $("exportLog").textContent = "Export en cours… " + p + "%";
+  }
 });
 window.ecom.onCaptionProgress(s => { const el = $("capMsg"); if (el) el.textContent = s; });
 
+/* ---------- Mode IA : short vidéo automatique (9:16, 90 s max) ---------- */
+const AI_MAX_CHARS = 900, AI_MAX_VOICE = 90, AI_MAX_MEDIA = 4;
+const AI_STEPS = ["Voix off", "Musique", "Images / vidéos", "Sous-titres", "Création"];
+const AI_TRANS = ["fade", "pushL", "zoomIn", "slideR"];
+function aiReset() {
+  ai = { step: 1, mode: "text", text: "", lang: EcomI18n.lang() === "en" ? "en" : "fr", gender: "female", engine: "sapi", voiceFile: "", voiceName: "", voiceDur: 0,
+    music: "", musicName: "", musicDur: 0, musicVol: 20, media: [], capOn: true, capStyle: "classic", capPos: "bottom", quality: "1080", busy: false, exporting: false, done: null, pct: 0, stage: "", err: "" };
+}
+function enterAI() {
+  pause(); aiFrom = editing ? "editor" : "home";
+  if (editing) saveNow(false);
+  if (!ai || ai.done) aiReset();
+  document.body.classList.add("ai-mode"); document.body.classList.remove("home-mode");
+  if (!aiVoices) window.ecom.ttsVoices().then(v => { aiVoices = v; if (ai && ai.step === 1 && !ai.busy) aiRender(); }).catch(() => { aiVoices = { ok: false, voices: [] }; });
+  aiRender();
+}
+function exitAI() {
+  if (ai && ai.busy) { setStatus("Création en cours… patientez jusqu'à la fin."); return; }
+  document.body.classList.remove("ai-mode");
+  if (aiFrom === "editor") { editing = true; resetEditorUI(); } else { editing = false; document.body.classList.add("home-mode"); renderHome(); }
+}
+function aiValid(step) {
+  if (step === 1) {
+    if (ai.mode === "text") return ai.text.trim().length >= 5 ? "" : L2("Écrivez un script d'au moins quelques mots, ou choisissez « Ajouter ma voix off ».", "Write a script of a few words at least, or choose “Add my voice-over”.");
+    return ai.voiceFile && ai.voiceDur > 0 ? "" : L2("Choisissez un fichier audio pour votre voix off.", "Choose an audio file for your voice-over.");
+  }
+  if (step === 3) return ai.media.length ? "" : L2("Ajoutez au moins une image ou une vidéo.", "Add at least one image or video.");
+  return "";
+}
+function aiNote() {
+  if (ai.engine === "gemini") return capSettings.has && capSettings.has.gemini ? L2("Clé Gemini détectée ✔ — voix naturelles (féminine : Kore, masculine : Puck).", "Gemini key detected ✔ — natural voices (female: Kore, male: Puck).")
+    : L2("⚠ Aucune clé Gemini enregistrée : ajoutez-la dans l'onglet Légendes (plateforme Google Gemini) du montage manuel.", "⚠ No Gemini key saved: add it in the Captions tab (Google Gemini) of the manual editor.");
+  if (!aiVoices) return L2("Recherche des voix installées…", "Looking for installed voices…");
+  const list = (aiVoices.voices || []).filter(v => String(v.culture).toLowerCase().startsWith(ai.lang));
+  if (!list.length) return L2("⚠ Aucune voix Windows trouvée pour cette langue : le rendu sera de moindre qualité. Essayez les voix IA (Gemini).", "⚠ No Windows voice found for this language: quality will be lower. Try the AI voices (Gemini).");
+  const g = v => v.gender === "Male" ? L2("masculine", "male") : v.gender === "Female" ? L2("féminine", "female") : L2("neutre", "neutral");
+  return L2("Voix détectées : ", "Detected voices: ") + list.map(v => String(v.name).replace(/^Microsoft /, "") + " (" + g(v) + ")").join(", ") + ".";
+}
+const aiBase = p => String(p).split(/[\\/]/).pop();
+function aiStep1() {
+  const seg = `<div class="ai-seg"><button data-aimode="text" class="${ai.mode === "text" ? "on" : ""}">✍️ Écrire un script</button><button data-aimode="voice" class="${ai.mode === "voice" ? "on" : ""}">🎙️ Ajouter ma voix off</button></div>`;
+  let body;
+  if (ai.mode === "text") {
+    body = `<textarea id="aiText" maxlength="${AI_MAX_CHARS}" placeholder="Collez ou écrivez ici le texte de votre short vidéo…">${esc(ai.text)}</textarea><div class="ai-count" id="aiCount">${ai.text.length} / ${AI_MAX_CHARS}</div>
+    <div class="ai-row"><div><label>Langue de la voix</label><br><select id="aiLang"><option value="fr"${ai.lang === "fr" ? " selected" : ""}>Français</option><option value="en"${ai.lang === "en" ? " selected" : ""}>English</option></select></div>
+    <div class="ai-card ${ai.gender === "female" ? "on" : ""}" data-aigender="female"><b>👩 Voix féminine</b><small>Voix off féminine</small></div>
+    <div class="ai-card ${ai.gender === "male" ? "on" : ""}" data-aigender="male"><b>👨 Voix masculine</b><small>Voix off masculine</small></div></div>
+    <div class="ai-row"><div><label>Moteur de voix</label><br><select id="aiEngine"><option value="sapi"${ai.engine === "sapi" ? " selected" : ""}>Voix du logiciel (Windows, hors ligne, gratuit)</option><option value="gemini"${ai.engine === "gemini" ? " selected" : ""}>Voix IA naturelles (Gemini, en ligne, gratuit)</option></select></div>
+    <div><button id="aiListen">▶ Écouter un extrait</button> <span class="ai-note" id="aiListenMsg"></span></div></div><div class="ai-note" id="aiNote">${aiNote()}</div>${ai.engine === "gemini" && !(capSettings.has && capSettings.has.gemini) ? `<div class="ai-row"><input type="password" id="aiGemKey" placeholder="Collez votre clé API Google Gemini ici" style="flex:1;min-width:240px"><button id="aiGemSave">Enregistrer la clé</button></div><div class="ai-note">Créez une clé gratuite sur aistudio.google.com/apikey</div>` : ""}`;
+  } else {
+    body = `<button id="aiPickVoice" class="primary">📂 Choisir un fichier audio…</button>
+    ${ai.voiceFile ? `<div class="ai-file"><b>${esc(ai.voiceName)}</b><small>${fmt(ai.voiceDur)}</small></div>` : ""}
+    ${ai.voiceDur > AI_MAX_VOICE ? `<div class="ai-note ai-warn">Maximum 1 min 30 : la voix sera coupée à 1:30.</div>` : ""}
+    <div class="ai-row"><div><label>Langue parlée</label><br><select id="aiLang"><option value="fr"${ai.lang === "fr" ? " selected" : ""}>Français</option><option value="en"${ai.lang === "en" ? " selected" : ""}>English</option></select></div></div>
+    <div class="ai-note">Les sous-titres d'une voix enregistrée utilisent la transcription en ligne (clé API de l'onglet Légendes du montage manuel).</div>`;
+  }
+  return `<h3>Étape 1 — Votre voix off</h3><div class="sub">Écrivez un script (900 caractères maximum) et choisissez une voix, ou ajoutez votre propre voix off (1 min 30 maximum).</div>${seg}${body}`;
+}
+function aiStep2() {
+  return `<h3>Étape 2 — Musique de fond</h3><div class="sub">Choisissez une musique enregistrée sur votre ordinateur, ou aucune musique.</div>
+  <div class="ai-row"><div class="ai-card ${ai.music ? "" : "on"}" data-aimusic="none"><b>🚫 Aucune musique</b><small>Voix off seule</small></div>
+  <div class="ai-card ${ai.music ? "on" : ""}" data-aimusic="pick"><b>🎵 Choisir une musique</b><small>Depuis cet ordinateur (mp3, wav, m4a…)</small></div></div>
+  ${ai.music ? `<div class="ai-file"><b>${esc(ai.musicName)}</b><small>${fmt(ai.musicDur)}</small></div>
+  <div class="ai-row"><div style="flex:1"><label>Volume de la musique : <b id="aiVolTxt">${ai.musicVol}%</b></label><br><input type="range" id="aiVol" min="5" max="60" value="${ai.musicVol}" style="width:100%"></div></div>
+  <audio controls src="${fileUrl(ai.music)}" style="width:100%;margin-top:12px"></audio>
+  <div class="ai-note">Si la musique est plus courte que la vidéo, elle est répétée automatiquement.</div>` : ""}`;
+}
+function aiStep3() {
+  const slots = [];
+  for (let i = 0; i < AI_MAX_MEDIA; i++) {
+    const m = ai.media[i];
+    if (!m) { slots.push(`<div class="ai-m empty" data-aiadd="1" style="cursor:pointer">＋<br>${L2("Ajouter", "Add")}</div>`); continue; }
+    const bg = m.type === "image" ? fileUrl(m.path) : m.thumb;
+    slots.push(`<div class="ai-m"><div class="th" ${bg ? `style="background-image:url('${String(bg).replace(/'/g, "%27")}')"` : ""}>${bg ? "" : "🎬"}</div><div class="mv">${i > 0 ? `<button data-aimv="${i}:-1">◀</button>` : ""}${i < ai.media.length - 1 ? `<button data-aimv="${i}:1">▶</button>` : ""}</div><button class="x" data-aidel="${i}" title="Retirer">✕</button><div class="mi"><b>${i + 1}. ${esc(m.name)}</b>${m.type === "image" ? "Photo" : fmt(m.duration)}</div></div>`);
+  }
+  return `<h3>Étape 3 — Images ou vidéos</h3><div class="sub">Choisissez 4 images ou 4 vidéos au maximum : le logiciel les assemble automatiquement. Si les vidéos sont plus courtes que la voix off, la première est répétée.</div>
+  <button id="aiPickMedia" class="primary"${ai.media.length >= AI_MAX_MEDIA ? " disabled" : ""}>📂 Ajouter des images / vidéos…</button> <b style="margin-left:10px">${ai.media.length} / ${AI_MAX_MEDIA}</b>
+  <div class="ai-media">${slots.join("")}</div>${ai.err ? `<div class="ai-note ai-warn">${esc(ai.err)}</div>` : ""}`;
+}
+function aiStep4() {
+  const styles = EcomText.CAPTION_STYLES.map(st => {
+    if (!capThumbs[st.id]) capThumbs[st.id] = EcomText.render("Légende", st.ts, 90).url;
+    return `<div class="cst${ai.capStyle === st.id ? " on" : ""}" data-aicst="${st.id}" title="${esc(st.name)}"><img src="${capThumbs[st.id]}"><small>${esc(st.name)}</small></div>`;
+  }).join("");
+  return `<h3>Étape 4 — Sous-titres</h3><div class="sub">Choisissez le style et la position des légendes automatiques (jusqu'à 2 lignes).</div>
+  <label class="chk2" style="display:flex;gap:8px;align-items:center;margin-bottom:14px"><input type="checkbox" id="aiCapOn"${ai.capOn ? " checked" : ""}> Ajouter des sous-titres automatiques</label>
+  <div id="aiCapBox" style="${ai.capOn ? "" : "opacity:.4;pointer-events:none"}"><div class="cap-styles" style="grid-template-columns:repeat(4,1fr)">${styles}</div>
+  <div class="ai-row"><div><label>Position</label><br><select id="aiCapPos"><option value="bottom"${ai.capPos === "bottom" ? " selected" : ""}>En bas</option><option value="mid"${ai.capPos === "mid" ? " selected" : ""}>Au milieu</option><option value="top"${ai.capPos === "top" ? " selected" : ""}>En haut</option></select></div></div></div>`;
+}
+function aiStep5() {
+  const voiceTxt = ai.mode === "text" ? L2(`Script (${ai.text.length} caractères) — voix ${ai.gender === "male" ? "masculine" : "féminine"}`, `Script (${ai.text.length} characters) — ${ai.gender === "male" ? "male" : "female"} voice`) : `${ai.voiceName} (${fmt(Math.min(ai.voiceDur, AI_MAX_VOICE))})`;
+  const st = EcomText.CAPTION_BY[ai.capStyle];
+  let body;
+  if (ai.done) body = `<div class="ai-done"><div class="ok">✅</div><h3>Terminé !</h3><div class="ai-note">${esc(ai.done.out)}</div>${ai.done.warning ? `<div class="ai-note ai-warn">⚠ ${esc(ai.done.warning)}</div>` : ""}
+    <div class="btns"><button id="aiReveal" class="primary">📁 Ouvrir le dossier</button><button id="aiOpenEditor">✏️ Ouvrir dans l'éditeur</button><button id="aiAgain">➕ Créer une autre vidéo</button></div></div>`;
+  else if (ai.busy) body = `<div class="ai-pct" id="aiPct">${Math.round(ai.pct)}%</div><div class="ai-prog"><div id="aiBar" style="width:${ai.pct}%"></div></div><div class="ai-stage" id="aiStage">${esc(ai.stage)}</div>`;
+  else body = `<div class="ai-sum"><span>Format</span><b>9:16 (vertical)</b><span>Voix off</span><b>${esc(voiceTxt)}</b><span>Musique</span><b>${ai.music ? esc(ai.musicName) + " (" + ai.musicVol + "%)" : L2("Aucune", "None")}</b>
+    <span>Images / vidéos</span><b>${ai.media.map(m => esc(m.name)).join(", ")}</b><span>Sous-titres</span><b>${ai.capOn ? esc(st ? st.name : "") : L2("Aucun", "None")}</b></div>
+    <div class="ai-row"><div><label>Qualité</label><br><select id="aiQuality"><option value="1080"${ai.quality === "1080" ? " selected" : ""}>1080p (Full HD)</option><option value="720"${ai.quality === "720" ? " selected" : ""}>720p (plus rapide)</option></select></div></div>
+    ${ai.err ? `<div class="ai-note ai-warn">❌ ${esc(ai.err)}</div>` : ""}<div class="ai-note">Durée maximale : 90 secondes. Le montage se fait tout seul : voix off, images, musique, transitions et sous-titres, puis la vidéo est enregistrée dans le dossier Exports.</div>`;
+  return `<h3>Étape 5 — Création de la vidéo</h3><div class="sub">Vérifiez le résumé puis lancez la création.</div>${body}`;
+}
+function aiRender() {
+  if (!ai) aiReset();
+  $("aiSteps").innerHTML = AI_STEPS.map((n, i) => `<div class="ai-step${ai.step === i + 1 ? " on" : ""}${ai.step > i + 1 ? " done" : ""}" data-aistep="${i + 1}"><i>${ai.step > i + 1 ? "✓" : i + 1}</i><span>${n}</span></div>`).join("");
+  $("aiBody").innerHTML = [aiStep1, aiStep2, aiStep3, aiStep4, aiStep5][ai.step - 1]();
+  const lock = ai.busy || !!ai.done;
+  $("aiPrev").style.visibility = ai.step > 1 && !lock ? "visible" : "hidden";
+  const nx = $("aiNext"); nx.style.visibility = lock ? "hidden" : "visible";
+  nx.textContent = ai.step === 5 ? "✨ Créer la vidéo" : "Suivant →"; nx.classList.toggle("create", ai.step === 5);
+  $("aiBack").disabled = !!ai.busy;
+}
+function aiProg(pct, stage) {
+  if (!ai) return;
+  ai.pct = Math.max(ai.pct || 0, Math.min(100, pct)); if (stage) ai.stage = stage;
+  const b = $("aiBar"), t = $("aiPct"), g = $("aiStage");
+  if (b) b.style.width = ai.pct + "%"; if (t) t.textContent = Math.round(ai.pct) + "%"; if (g) g.textContent = ai.stage;
+}
+async function aiPickFile(kind) {
+  const paths = await window.ecom.openMedia(kind); if (!paths.length) return null;
+  const info = await window.ecom.probe(paths[0]); return { path: paths[0], name: aiBase(paths[0]), dur: info.duration || 0 };
+}
+async function aiAddVisuals() {
+  const room = AI_MAX_MEDIA - ai.media.length; if (room <= 0) return;
+  const paths = await window.ecom.openMedia("visual"); if (!paths.length) return;
+  ai.err = paths.length > room ? L2(`Maximum ${AI_MAX_MEDIA} fichiers : seuls les ${room} premiers ont été ajoutés.`, `Maximum ${AI_MAX_MEDIA} files: only the first ${room} were added.`) : "";
+  for (const p of paths.slice(0, room)) {
+    const type = typeOfPath(p); if (type !== "image" && type !== "video") continue;
+    setStatus(L2("Analyse de ", "Analyzing ") + aiBase(p) + "…");
+    const info = await window.ecom.probe(p), dur = type === "image" ? 5 : (info.duration || 5);
+    ai.media.push({ path: p, name: aiBase(p), type, duration: dur, thumb: type === "video" ? await window.ecom.thumb(p, dur) : "", width: info.width, height: info.height, hasAudio: !!info.hasAudio });
+  }
+  aiRender();
+}
+async function aiListen() {
+  const msg = $("aiListenMsg"); msg.textContent = L2("Génération de l'extrait…", "Generating sample…");
+  const sample = ai.text.trim() || L2("Bonjour, voici un exemple de voix off pour votre short vidéo.", "Hello, this is a sample voice-over for your short video.");
+  const r = await window.ecom.ttsSynth({ text: sample, lang: ai.lang, gender: ai.gender, engine: ai.engine, preview: true });
+  if (!r.ok) { msg.textContent = "❌ " + r.error; return; }
+  msg.textContent = "▶ " + (r.voice || "");
+  const a = new Audio(fileUrl(r.path)); a.play().catch(() => {});
+}
+function aiNext() {
+  if (ai.step < 5) {
+    const bad = aiValid(ai.step); if (bad) { setStatus(bad); ai.err = bad; aiRender(); const m = $("aiBody"); m.insertAdjacentHTML("beforeend", `<div class="ai-note ai-warn">${esc(bad)}</div>`); return; }
+    ai.err = ""; ai.step++; aiRender();
+  } else aiGenerate();
+}
+// Découpe le script en phrases et répartit le temps (calé sur les silences de la voix)
+function scriptCaptions(text, T, sil) {
+  const clean = String(text).replace(/\s+/g, " ").trim(), maxC = 2 * capLineMax();
+  const parts = (clean.match(/[^.!?…;:\n]+[.!?…;:]*/g) || [clean]).map(x => x.trim()).filter(Boolean), out = [];
+  parts.forEach(pt => {
+    if (pt.length <= maxC) { out.push(pt); return; }
+    let cur = ""; pt.split(/(?<=,)\s+/).forEach(x => { if (cur && (cur + " " + x).length > maxC) { out.push(cur); cur = x; } else cur = cur ? cur + " " + x : x; });
+    if (cur) out.push(cur);
+  });
+  const sl = (sil && sil.silences) || [], dur = (sil && sil.duration) || T;
+  let t0 = 0, t1 = T;
+  if (sl.length && sl[0].start < 0.05) t0 = Math.min(sl[0].end, T * 0.3);
+  const last = sl[sl.length - 1]; if (last && last.end >= dur - 0.08) t1 = Math.max(t0 + 0.5, Math.min(T, last.start));
+  const w = out.map(x => x.length + (x.match(/[.!?…]/g) || []).length * 10 + (x.match(/[,;:]/g) || []).length * 4), tot = w.reduce((a, b) => a + b, 0) || 1;
+  const bounds = [t0]; let acc = 0; w.forEach(x => { acc += x; bounds.push(t0 + (t1 - t0) * acc / tot); });
+  const mids = sl.filter(x => x.start > t0 && x.end < t1).map(x => (x.start + x.end) / 2);
+  for (let i = 1; i < bounds.length - 1; i++) {
+    let best = null, bd = 0.7;
+    mids.forEach(m => { const d = Math.abs(m - bounds[i]); if (d < bd) { bd = d; best = m; } });
+    if (best !== null && best > bounds[i - 1] + 0.3 && best < bounds[i + 1] - 0.3) bounds[i] = best;
+  }
+  return out.map((x, i) => ({ start: bounds[i], end: Math.max(bounds[i] + 0.3, bounds[i + 1] - 0.04), text: x }));
+}
+// Plan de montage : chaque média une fois, puis on répète le premier jusqu'à remplir la durée de la voix off
+function planSegments(visuals, T) {
+  const hasVideo = visuals.some(m => m.type === "video"), imgDur = hasVideo ? 4 : Math.max(2.5, T / visuals.length);
+  const base = m => m.type === "image" ? imgDur : Math.max(1.5, m.duration);
+  const segs = []; let t = 0, i = 0, guard = 0;
+  while (t < T - 0.05 && guard++ < 300) {
+    const m = i < visuals.length ? visuals[i] : visuals[0]; i++;
+    const d = Math.min(base(m), T - t);
+    segs.push({ m, start: t, duration: d }); t += d;
+  }
+  return segs;
+}
+async function aiGenerate() {
+  if (ai.busy) return;
+  const bad = aiValid(1) || aiValid(3); if (bad) { ai.err = bad; aiRender(); return; }
+  ai.busy = true; ai.exporting = false; ai.err = ""; ai.pct = 0; ai.stage = L2("Préparation…", "Preparing…"); aiRender();
+  const prevState = state, wasEditing = editing; editing = false; noProxy = true;
+  try {
+    // 1) voix off
+    let voice;
+    if (ai.mode === "text") {
+      aiProg(2, L2("Création de la voix off…", "Creating the voice-over…"));
+      const r = await window.ecom.ttsSynth({ text: ai.text.slice(0, AI_MAX_CHARS), lang: ai.lang, gender: ai.gender, engine: ai.engine });
+      if (!r.ok) throw new Error(r.error);
+      voice = { path: r.path, dur: r.duration || 0, name: "Voix off" };
+    } else voice = { path: ai.voiceFile, dur: ai.voiceDur, name: ai.voiceName };
+    if (!(voice.dur > 0.5)) throw new Error(L2("La voix off est vide ou illisible.", "The voice-over is empty or unreadable."));
+    const T = Math.min(AI_MAX_VOICE, voice.dur);
+    aiProg(18, L2("Préparation du montage…", "Building the edit…"));
+    // 2) projet 9:16
+    const st = freshState(); st.id = newProjId(); st.created = Date.now(); st.ratio = "9:16";
+    const d0 = new Date(); st.name = L2("Short IA ", "AI Short ") + `${d0.getFullYear()}-${pad2(d0.getMonth() + 1)}-${pad2(d0.getDate())} ${pad2(d0.getHours())}:${pad2(d0.getMinutes())}`;
+    st.audioTracks = ai.music ? 2 : 1; st.capStyle = ai.capStyle; st.capPos = ai.capPos;
+    const mkMedia = (o, type) => ({ id: newId(), path: o.path, name: o.name, type, duration: o.dur || o.duration || 5, hasAudio: type === "audio" ? true : !!o.hasAudio, width: o.width || 0, height: o.height || 0, thumb: o.thumb || "", proxy: "", proxyTried: true });
+    const clipOf = (m, kind, track, start, dur, extra) => Object.assign({ id: newId(), mediaId: m.id, kind, track, type: kind === "audio" ? "audio" : m.type, path: m.path, name: m.name, start, inPoint: 0, duration: dur, mediaDur: m.type === "image" ? 0 : m.duration, scale: 100, x: 0, y: 0, volume: 100, hasAudio: kind === "audio" ? true : !!m.hasAudio, proxy: "", thumb: m.thumb || "", fit: "fit", fx: [], adj: {}, srcW: m.width || 0, srcH: m.height || 0 }, extra || {});
+    const vm = mkMedia(voice, "audio"); st.media.push(vm); st.clips.push(clipOf(vm, "audio", 0, 0, T, { volume: 100 }));
+    if (ai.music) {
+      const mm = mkMedia({ path: ai.music, name: ai.musicName, dur: ai.musicDur }, "audio"); st.media.push(mm);
+      let t = 0, n = 0; while (t < T - 0.05 && n++ < 60) { const d = Math.min(Math.max(0.5, mm.duration), T - t); st.clips.push(clipOf(mm, "audio", 1, t, d, { volume: ai.musicVol })); t += d; }
+    }
+    const visuals = ai.media.map(o => { const m = mkMedia(o, o.type); st.media.push(m); return m; });
+    planSegments(visuals, T).forEach((sg, i) => {
+      const c = clipOf(sg.m, "video", 0, sg.start, sg.duration, { fit: "fill", volume: 0 });
+      if (i > 0) c.trans = { id: AI_TRANS[(i - 1) % AI_TRANS.length], dur: 0.5 };
+      st.clips.push(c);
+    });
+    state = st;
+    // 3) sous-titres
+    if (ai.capOn) {
+      aiProg(28, L2("Création des sous-titres…", "Creating subtitles…"));
+      let caps = [];
+      if (ai.mode === "text") caps = scriptCaptions(ai.text, T, await window.ecom.detectSilence(voice.path));
+      else {
+        const prov = capSettings.provider;
+        if (capSettings.has && capSettings.has[prov]) {
+          const r = await window.ecom.transcribe({ sources: [{ path: voice.path, start: 0, inPoint: 0, duration: T, volume: 100 }], total: T, language: ai.lang, provider: prov });
+          if (r.ok) caps = buildCaptions(r); else ai.warn = r.error;
+        } else ai.warn = L2("Sous-titres ignorés : aucune clé API enregistrée pour la voix enregistrée.", "Subtitles skipped: no API key saved for the recorded voice.");
+      }
+      await addCaptionClips(caps, (i, n) => aiProg(28 + 15 * i / n));
+    }
+    // 4) montage + export
+    aiProg(45, L2("Montage et export de la vidéo…", "Editing and exporting the video…"));
+    const out = await window.ecom.nextExportPath("Short-IA");
+    ai.exporting = true;
+    const r = await window.ecom.exportVideo(buildExportPayload(ai.quality, out));
+    ai.exporting = false;
+    if (!r.ok) throw new Error(r.error);
+    await window.ecom.projSave(st.id, projMeta(), snapshot());
+    ai.done = { out: r.output, projId: st.id, warning: r.warning || ai.warn || "" };
+    ai.pct = 100; ai.stage = "";
+  } catch (e) {
+    ai.err = String(e.message || e).slice(0, 600);
+  } finally {
+    ai.busy = false; ai.exporting = false; noProxy = false; state = prevState; editing = wasEditing;
+    aiRender();
+  }
+}
+function initAI() {
+  const body = $("aiBody");
+  body.addEventListener("click", async e => {
+    const t = e.target; if (ai.busy) return;
+    const q = sel => t.closest(sel);
+    let el;
+    if ((el = q("[data-aimode]"))) { ai.mode = el.dataset.aimode; ai.err = ""; aiRender(); }
+    else if ((el = q("[data-aigender]"))) { ai.gender = el.dataset.aigender; aiRender(); }
+    else if (q("#aiListen")) aiListen();
+    else if (q("#aiGemSave")) { const k = $("aiGemKey").value.trim(); if (k) { await window.ecom.setSettings({ provider: "gemini", key: k }); capSettings = await window.ecom.getSettings(); aiRender(); } }
+    else if (q("#aiPickVoice")) { const f = await aiPickFile("audio"); if (f) { ai.voiceFile = f.path; ai.voiceName = f.name; ai.voiceDur = f.dur; aiRender(); } }
+    else if ((el = q("[data-aimusic]"))) { if (el.dataset.aimusic === "none") { ai.music = ""; ai.musicName = ""; ai.musicDur = 0; aiRender(); } else { const f = await aiPickFile("audio"); if (f) { ai.music = f.path; ai.musicName = f.name; ai.musicDur = f.dur; aiRender(); } } }
+    else if (q("#aiPickMedia") || q("[data-aiadd]")) aiAddVisuals();
+    else if ((el = q("[data-aidel]"))) { ai.media.splice(+el.dataset.aidel, 1); ai.err = ""; aiRender(); }
+    else if ((el = q("[data-aimv]"))) { const [i, d] = el.dataset.aimv.split(":").map(Number), j = i + d; if (ai.media[j]) { [ai.media[i], ai.media[j]] = [ai.media[j], ai.media[i]]; aiRender(); } }
+    else if ((el = q("[data-aicst]"))) { ai.capStyle = el.dataset.aicst; document.querySelectorAll("[data-aicst]").forEach(x => x.classList.toggle("on", x === el)); }
+    else if (q("#aiReveal")) window.ecom.revealFile(ai.done && ai.done.out);
+    else if (q("#aiOpenEditor")) { const id = ai.done.projId; document.body.classList.remove("ai-mode"); if (wasEditingNow()) await saveNow(false); editing = false; await openProjectById(id); }
+    else if (q("#aiAgain")) { aiReset(); aiRender(); }
+  });
+  body.addEventListener("input", e => {
+    const t = e.target;
+    if (t.id === "aiText") { ai.text = t.value.slice(0, AI_MAX_CHARS); const c = $("aiCount"); c.textContent = `${ai.text.length} / ${AI_MAX_CHARS}`; c.classList.toggle("over", ai.text.length >= AI_MAX_CHARS); }
+    else if (t.id === "aiVol") { ai.musicVol = +t.value; $("aiVolTxt").textContent = t.value + "%"; }
+  });
+  body.addEventListener("change", e => {
+    const t = e.target;
+    if (t.id === "aiLang") { ai.lang = t.value; aiRender(); }
+    else if (t.id === "aiEngine") { ai.engine = t.value; const n = $("aiNote"); if (n) n.textContent = aiNote(); }
+    else if (t.id === "aiCapOn") { ai.capOn = t.checked; $("aiCapBox").style.cssText = ai.capOn ? "" : "opacity:.4;pointer-events:none"; }
+    else if (t.id === "aiCapPos") ai.capPos = t.value;
+    else if (t.id === "aiQuality") ai.quality = t.value;
+  });
+  $("aiSteps").onclick = e => { const s = e.target.closest(".ai-step.done"); if (s && !ai.busy && !ai.done) { ai.step = +s.dataset.aistep; aiRender(); } };
+  $("aiPrev").onclick = () => { if (ai.step > 1 && !ai.busy) { ai.step--; aiRender(); } };
+  $("aiNext").onclick = aiNext; $("aiBack").onclick = exitAI;
+}
+const wasEditingNow = () => aiFrom === "editor";
+
 /* ---------- Initialisation ---------- */
-document.querySelectorAll(".tool").forEach(b => b.onclick = () => showPanel(b.dataset.panel));
+document.querySelectorAll(".tool").forEach(b => b.onclick = () => b.dataset.panel === "ai" ? enterAI() : showPanel(b.dataset.panel));
+$("homeAI").onclick = enterAI;
 $("importBtn").onclick = async () => { const p = await window.ecom.openMedia(); if (p.length) await importPaths(p); };
 $("play").onclick = () => P.playing ? pause() : play();
 $("splitBtn").onclick = () => splitAt(P.t);
@@ -1179,8 +1519,11 @@ window.addEventListener("dragover", e => e.preventDefault());
 window.addEventListener("drop", e => e.preventDefault());
 document.addEventListener("mouseup", () => { const a = document.activeElement; if (a && a.type === "range") a.blur(); });
 window.addEventListener("keydown", e => {
-  if (document.body.classList.contains("home-mode") || !$("confirmModal").classList.contains("hidden")) return;
+  if (document.body.classList.contains("home-mode") || document.body.classList.contains("ai-mode") || !$("confirmModal").classList.contains("hidden")) return;
   if (/INPUT|SELECT|TEXTAREA/.test(e.target.tagName) && e.target.type !== "range") return;
+  if ((e.ctrlKey || e.metaKey) && e.code === "KeyZ" && !e.shiftKey) { e.preventDefault(); undo(); return; }
+  if ((e.ctrlKey || e.metaKey) && (e.code === "KeyY" || (e.code === "KeyZ" && e.shiftKey))) { e.preventDefault(); redo(); return; }
+  if (e.code === "KeyK" && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); if (!e.repeat) splitAt(P.t); return; }
   if (e.code === "ArrowLeft" || e.code === "ArrowRight") {
     e.preventDefault();
     const step = e.shiftKey ? 1 / 30 : 1;
@@ -1194,7 +1537,7 @@ window.addEventListener("keydown", e => {
   else if (e.key === "Delete" || e.key === "Backspace") deleteSelected();
 });
 
-initTimeline(); initProps(); initFrameEditing(); $("fxDefs").innerHTML = EcomFX.svgDefs(); showPanel("media"); renderTimeline(); applyRatio(); updateUI();
+initTimeline(); initProps(); initFrameEditing(); initAI(); $("fxDefs").innerHTML = EcomFX.svgDefs(); showPanel("media"); renderTimeline(); applyRatio(); updateUI();
 window.ecom.getStickerDir().then(d => { stickerDir = d; if (currentPanel === "stickers") showPanel("stickers"); });
 window.ecom.getFxDir().then(d => { fxDir = d; if (currentPanel === "effects" || currentPanel === "transitions") showPanel(currentPanel); });
 window.ecom.getSettings().then(s => { capSettings = s; });

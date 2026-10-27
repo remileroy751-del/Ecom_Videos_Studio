@@ -1,6 +1,6 @@
 const { contextBridge, ipcRenderer, webUtils } = require("electron");
 contextBridge.exposeInMainWorld("ecom", {
-  openMedia: () => ipcRenderer.invoke("open-media"),
+  openMedia: k => ipcRenderer.invoke("open-media", k),
   probe: f => ipcRenderer.invoke("probe", f),
   projList: () => ipcRenderer.invoke("proj-list"),
   projLoad: id => ipcRenderer.invoke("proj-load", id),
@@ -9,6 +9,11 @@ contextBridge.exposeInMainWorld("ecom", {
   projDelete: id => ipcRenderer.invoke("proj-delete", id),
   projDir: () => ipcRenderer.invoke("proj-dir"),
   openFolder: () => ipcRenderer.invoke("open-folder"),
+  nextExportPath: p => ipcRenderer.invoke("next-export-path", p),
+  revealFile: f => ipcRenderer.invoke("reveal-file", f),
+  detectSilence: f => ipcRenderer.invoke("detect-silence", f),
+  ttsVoices: () => ipcRenderer.invoke("tts-voices"),
+  ttsSynth: o => ipcRenderer.invoke("tts-synth", o),
   makeProxy: f => ipcRenderer.invoke("make-proxy", f),
   thumb: (f, d) => ipcRenderer.invoke("thumb", f, d),
   getStickerDir: () => ipcRenderer.invoke("sticker-dir"),
