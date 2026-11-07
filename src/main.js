@@ -4,7 +4,9 @@ const { spawn } = require("child_process");
 const ffmpegPath = require("ffmpeg-static").replace("app.asar", "app.asar.unpacked");
 const { buildExportArgs, buildTranscribeArgs, buildAss, resolutionFor } = require("./ffgraph");
 
-let win;
+// Garde le processus graphique actif même après un incident (sinon Chromium bascule en rendu logiciel et l'aperçu vidéo reste noir)
+try { app.commandLine.appendSwitch("disable-gpu-process-crash-limit"); app.disableDomainBlockingFor3DAPIs(); } catch (e) {}
+let win, crashed = false;
 function createWindow() {
   win = new BrowserWindow({
     width: 1500, height: 930, minWidth: 1100, minHeight: 700, backgroundColor: "#090b10",
@@ -14,7 +16,15 @@ function createWindow() {
   });
   win.setMenuBarVisibility(false);
   win.loadFile(path.join(__dirname, "index.html"));
+  // Si la page d'interface plante, on la recharge et l'interface rouvre automatiquement le projet en cours
+  win.webContents.on("render-process-gone", (_, d) => {
+    if (d && d.reason === "clean-exit") return;
+    crashed = true; setTimeout(() => { try { win && !win.isDestroyed() && win.webContents.reload(); } catch (e) {} }, 400);
+  });
 }
+// Si le processus graphique redémarre, l'interface réinitialise l'aperçu vidéo
+app.on("child-process-gone", (_, d) => { if (d && d.type === "GPU") setTimeout(() => send("preview-reset", "gpu"), 600); });
+ipcMain.handle("consume-crash", () => { const c = crashed; crashed = false; return c; });
 // ---------- Dossier de travail (Vidéos\\EcomVideoStudio : Projets + Exports), créé automatiquement ----------
 function baseDir() {
   let v; try { v = app.getPath("videos"); } catch (e) { v = path.join(app.getPath("home"), "Videos"); }
@@ -28,15 +38,22 @@ app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(
 const send = (ch, d) => { try { win && win.webContents.send(ch, d); } catch (e) {} };
 
 // ---------- FFmpeg ----------
+const ERR_RE = /(error|invalid|failed|cannot|unable|no such|not found|too many|does not|not supported|unsupported|permission|denied|matches no streams|out of memory|allocate)/i;
 function runFF(args, opts = {}) {
   return new Promise(resolve => {
-    let tail = "";
+    let tail = "", full = "", rest = "";
+    const errs = [];
     let p;
     try { p = spawn(ffmpegPath, args, { cwd: opts.cwd, windowsHide: true }); }
-    catch (e) { return resolve({ code: -1, stderr: String(e.message) }); }
-    p.stderr.on("data", d => { const s = String(d); tail = (tail + s).slice(-6000); if (opts.onData) opts.onData(s); });
-    p.on("error", e => resolve({ code: -1, stderr: e.message }));
-    p.on("close", code => resolve({ code, stderr: tail }));
+    catch (e) { return resolve({ code: -1, stderr: String(e.message), errs: [String(e.message)], full: String(e.message) }); }
+    p.stderr.on("data", d => {
+      const s = String(d); tail = (tail + s).slice(-6000); full = (full + s).slice(-200000);
+      rest += s; const lines = rest.split(/[\r\n]+/); rest = lines.pop();
+      lines.forEach(l => { if (ERR_RE.test(l) && !/^\[(libx264|aac)/.test(l) && errs.indexOf(l) < 0) { errs.push(l.trim().slice(0, 300)); if (errs.length > 40) errs.shift(); } });
+      if (opts.onData) opts.onData(s);
+    });
+    p.on("error", e => resolve({ code: -1, stderr: e.message, errs: [e.message], full: e.message }));
+    p.on("close", code => resolve({ code, stderr: tail, errs, full }));
   });
 }
 
@@ -56,15 +73,17 @@ function probe(file) {
 }
 
 // ---------- Projets / fichiers ----------
-const EXT = { video: ["mp4", "mov", "mkv", "avi", "webm", "m4v", "wmv", "flv", "mpeg", "mpg", "3gp"], image: ["jpg", "jpeg", "png", "webp", "bmp", "gif"], audio: ["mp3", "wav", "aac", "m4a", "ogg", "flac"] };
+const EXT = { video: ["mp4", "mov", "mkv", "avi", "webm", "m4v", "wmv", "flv", "mpeg", "mpg", "3gp"], image: ["jpg", "jpeg", "png", "webp", "bmp", "gif"], audio: ["mp3", "mpeg", "mpga", "mp2", "mpg", "wav", "aac", "m4a", "ogg", "opus", "flac", "wma"] };
 ipcMain.handle("open-media", async (_, kind) => {
   if (kind === "audio" || kind === "visual") {
-    const r = await dialog.showOpenDialog(win, { properties: kind === "visual" ? ["openFile", "multiSelections"] : ["openFile"], filters: [{ name: M("media"), extensions: kind === "audio" ? EXT.audio : EXT.video.concat(EXT.image) }] });
+    const filters = [{ name: M("media"), extensions: kind === "audio" ? EXT.audio : EXT.video.concat(EXT.image) }];
+    if (kind === "audio") filters.push({ name: M("allFiles"), extensions: ["*"] });
+    const r = await dialog.showOpenDialog(win, { properties: kind === "visual" ? ["openFile", "multiSelections"] : ["openFile"], filters });
     return r.canceled ? [] : r.filePaths;
   }
   const r = await dialog.showOpenDialog(win, {
     properties: ["openFile", "multiSelections"],
-    filters: [{ name: M("media"), extensions: ["mp4", "mov", "mkv", "avi", "webm", "m4v", "wmv", "flv", "mpeg", "mpg", "3gp", "jpg", "jpeg", "png", "webp", "bmp", "gif", "mp3", "wav", "aac", "m4a", "ogg", "flac"] }]
+    filters: [{ name: M("media"), extensions: ["mp4", "mov", "mkv", "avi", "webm", "m4v", "wmv", "flv", "mpeg", "mpg", "3gp", "jpg", "jpeg", "png", "webp", "bmp", "gif"].concat(EXT.audio) }, { name: M("allFiles"), extensions: ["*"] }]
   });
   return r.canceled ? [] : r.filePaths;
 });
@@ -83,6 +102,19 @@ async function makeProxy(file) {
   if (r.code !== 0) { try { fs.unlinkSync(tmp); } catch (e) {} return ""; }
   fs.renameSync(tmp, out); return out;
 }
+async function makeAudioProxy(file) {
+  const st = fs.statSync(file);
+  const h = crypto.createHash("sha1").update(file + "|" + st.size + "|" + st.mtimeMs + "|a").digest("hex").slice(0, 16);
+  const dir = path.join(app.getPath("userData"), "proxies"), out = path.join(dir, h + ".mp3");
+  if (fs.existsSync(out) && fs.statSync(out).size > 1000) return out;
+  fs.mkdirSync(dir, { recursive: true });
+  const tmp = path.join(dir, h + ".part.mp3");
+  const r = await runFF(["-y", "-hide_banner", "-i", file, "-vn", "-map", "0:a:0", "-c:a", "libmp3lame", "-b:a", "160k", "-ar", "44100", "-f", "mp3", tmp]);
+  if (r.code !== 0) { try { fs.unlinkSync(tmp); } catch (e) {} return ""; }
+  fs.renameSync(tmp, out); return out;
+}
+ipcMain.handle("make-audio-proxy", (_, file) => { proxyChain = proxyChain.then(() => makeAudioProxy(file)).catch(() => ""); return proxyChain; });
+ipcMain.handle("files-exist", (_, list) => (Array.isArray(list) ? list : []).map(f => { try { return fs.existsSync(f); } catch (e) { return false; } }));
 ipcMain.handle("make-proxy", (_, file) => { proxyChain = proxyChain.then(() => makeProxy(file)).catch(() => ""); return proxyChain; });
 ipcMain.handle("sticker-dir", () => path.join(__dirname, "stickers"));
 ipcMain.handle("fx-dir", () => path.join(__dirname, "effects"));
@@ -141,6 +173,28 @@ function prepareSubs(tmp, caps, res) {
     try { if (fs.existsSync(path.join(fonts, f))) fs.copyFileSync(path.join(fonts, f), path.join(tmp, f)); } catch (e) {}
   }
 }
+const logsDir = () => path.join(app.getPath("userData"), "logs");
+function saveLog(name, text) {
+  try {
+    fs.mkdirSync(logsDir(), { recursive: true });
+    const f = path.join(logsDir(), name); fs.writeFileSync(f, text, "utf8");
+    fs.readdirSync(logsDir()).filter(x => /^export-\d+\.log$/.test(x)).sort().slice(0, -15).forEach(x => { try { fs.unlinkSync(path.join(logsDir(), x)); } catch (e) {} });
+    return f;
+  } catch (e) { return ""; }
+}
+ipcMain.handle("open-logs", () => { try { fs.mkdirSync(logsDir(), { recursive: true }); shell.openPath(logsDir()); } catch (e) {} return true; });
+// Message d'erreur lisible : cause probable + vraies lignes d'erreur FFmpeg (la fin du journal ne contient que des statistiques)
+function explainFF(r) {
+  const txt = (r.errs || []).join("\n") + "\n" + (r.stderr || "");
+  let hint = "";
+  if (/too many packets buffered|muxing queue/i.test(txt)) hint = M("hQueue");
+  else if (/cannot allocate memory|out of memory|0xC0000005/i.test(txt)) hint = M("hMem");
+  else if (/permission denied|access is denied|being used by another/i.test(txt)) hint = M("hPerm");
+  else if (/no such file|error opening input|could not open/i.test(txt)) hint = M("hFile");
+  else if (/invalid data found|moov atom not found|corrupt/i.test(txt)) hint = M("hCorrupt");
+  const lines = (r.errs || []).slice(-6).join("\n");
+  return (hint ? hint + "\n\n" : "") + (lines || (r.stderr || "").slice(-500) || "FFmpeg");
+}
 ipcMain.handle("export-video", async (_, o) => {
   const res = resolutionFor(o.ratio, o.resolution);
   const unpack = p => String(p).replace(/app\.asar(?!\.unpacked)/, "app.asar.unpacked");
@@ -156,6 +210,20 @@ ipcMain.handle("export-video", async (_, o) => {
       return n;
     });
     o.fxDir = unpack(path.join(__dirname, "effects"));
+    // Fichiers sources introuvables (déplacés / supprimés) : message clair au lieu d'un échec FFmpeg
+    const srcFiles = [...new Set(o.video.filter(c => c.type !== "text" && c.path).map(c => c.path).concat((o.audio || []).map(a => a.path)).filter(Boolean))];
+    const gone = srcFiles.filter(f => { try { return !fs.existsSync(f); } catch (e) { return true; } });
+    if (gone.length) return { ok: false, error: M("missing") + "\n" + gone.slice(0, 6).map(f => " • " + f).join("\n") + (gone.length > 6 ? "\n…" : "") };
+    // Durées réelles des fichiers : un clip qui démarre après la fin réelle du fichier ferait échouer l'export
+    const real = new Map();
+    for (const f of srcFiles) { try { real.set(f, (await probe(f)).duration || 0); } catch (e) { real.set(f, 0); } }
+    o.video.forEach(c => {
+      if (c.type !== "video" || !c.path) return;
+      const d = real.get(c.path) || 0; if (d <= 0) return;
+      c.mediaDur = d;
+      if ((c.inPoint || 0) > d - 0.1) c.inPoint = Math.max(0, d - 0.1);
+    });
+    (o.audio || []).forEach(a => { const d = real.get(a.path) || 0; if (d > 0 && (a.inPoint || 0) > d - 0.05) a.inPoint = Math.max(0, d - 0.05); });
     const caps = (o.captions || []).filter(c => c.text && c.end > c.start);
     let burn = caps.length > 0;
     if (burn) prepareSubs(tmp, caps, res);
@@ -168,6 +236,7 @@ ipcMain.handle("export-video", async (_, o) => {
     let r = await run(), warning;
     // Repli progressif : si le moteur vidéo embarqué refuse une fonction, on réessaie sans elle
     const steps = [
+      { when: () => !o.light, apply: () => { o.light = true; o.tolerant = true; }, retry: "retryLight", warn: "warnLight" },
       { when: () => burn, apply: () => { burn = false; }, retry: "retryCaps", warn: "warnCaps" },
       { when: () => o.video.some(c => c.type === "sticker" || c.type === "text"), apply: () => { o.video = o.video.map(c => ({ ...c, noAnim: true })); }, retry: "retryStk", warn: "warnStk" },
       { when: () => o.video.some(c => c.fx && c.fx.length), apply: () => { o.video = o.video.map(c => ({ ...c, noFx: true })); }, retry: "retryFx", warn: "warnFx" },
@@ -180,7 +249,9 @@ ipcMain.handle("export-video", async (_, o) => {
       st.apply(); r = await run();
       if (r.code === 0) warning = M(st.warn);
     }
-    return r.code === 0 ? { ok: true, output: o.output, warning } : { ok: false, error: r.stderr.slice(-800) || "FFmpeg" };
+    if (r.code === 0) return { ok: true, output: o.output, warning };
+    const logFile = saveLog("export-" + Date.now() + ".log", "EcomVideoStudio — journal d'export\r\n" + new Date().toISOString() + "\r\nSortie : " + o.output + "\r\n\r\n" + (r.full || r.stderr || ""));
+    return { ok: false, error: explainFF(r) + (logFile ? "\n\n" + M("logSaved") + " " + logFile : "") };
   } catch (e) {
     return { ok: false, error: e.message };
   } finally {
@@ -198,7 +269,11 @@ const MSG = {
     retryStk: "\nAnimation des stickers non supportée, nouvel essai avec des stickers fixes…\n", warnStk: "Export terminé, mais les stickers sont fixes (animation non supportée par le moteur vidéo).",
     noWinVoice: "Aucune voix Windows disponible pour cette langue. Choisissez les voix IA (Gemini) ou installez une voix dans les paramètres Windows (Heure et langue > Voix).", ttsFail: "Échec de la synthèse vocale :",
     retryFx: "\nUn effet n'est pas supporté par le moteur vidéo, nouvel essai sans effets…\n", warnFx: "Export terminé, mais sans les effets (non supportés par le moteur vidéo).",
-    retryTr: "\nUne transition n'est pas supportée par le moteur vidéo, nouvel essai sans transitions…\n", warnTr: "Export terminé, mais sans les transitions (non supportées par le moteur vidéo)." },
+    retryTr: "\nUne transition n'est pas supportée par le moteur vidéo, nouvel essai sans transitions…\n", warnTr: "Export terminé, mais sans les transitions (non supportées par le moteur vidéo).",
+    retryLight: "\nPremier essai interrompu : nouvel essai en mode sécurisé (tous les éléments conservés)…\n", warnLight: "Export terminé en mode sécurisé (aucun élément retiré).",
+    missing: "Des fichiers du montage sont introuvables (déplacés ou supprimés). Remettez-les à leur place ou retirez-les du projet :", logSaved: "Journal complet :", allFiles: "Tous les fichiers",
+    hQueue: "L'encodage a mis trop de temps à démarrer (projet lourd). Réessayez ; en 720p ou 480p c'est plus rapide.", hMem: "Mémoire insuffisante pour cet export. Fermez d'autres programmes ou choisissez 720p / 480p.",
+    hPerm: "Impossible d'écrire le fichier de sortie. Fermez la vidéo si elle est ouverte dans un lecteur, ou choisissez un autre dossier.", hFile: "Un fichier source est illisible ou introuvable.", hCorrupt: "Un fichier source semble corrompu ou incomplet." },
   en: { media: "Media", project: "EcomVideoStudio project", saveProject: "Save project", exportVideo: "Export video", videoMp4: "MP4 video",
     noKey: "No API key saved for this provider. Enter it in the Captions panel.", prep: "Preparing audio…", noSound: "No sound to transcribe.",
     prepFail: "Audio preparation failed: ", transcribing: "Online transcription… ({i}/{n})", offline: "Cannot reach the transcription service. Check your internet connection.",
@@ -207,7 +282,11 @@ const MSG = {
     retryStk: "\nSticker animation not supported, retrying with static stickers…\n", warnStk: "Export finished, but stickers are static (animation not supported by the video engine).",
     noWinVoice: "No Windows voice available for this language. Choose the AI voices (Gemini) or install a voice in Windows settings (Time & language > Speech).", ttsFail: "Speech synthesis failed:",
     retryFx: "\nAn effect is not supported by the video engine, retrying without effects…\n", warnFx: "Export finished, but without effects (not supported by the video engine).",
-    retryTr: "\nA transition is not supported by the video engine, retrying without transitions…\n", warnTr: "Export finished, but without transitions (not supported by the video engine)." }
+    retryTr: "\nA transition is not supported by the video engine, retrying without transitions…\n", warnTr: "Export finished, but without transitions (not supported by the video engine).",
+    retryLight: "\nFirst attempt interrupted: retrying in safe mode (nothing removed)…\n", warnLight: "Export finished in safe mode (nothing removed).",
+    missing: "Some files used in the project cannot be found (moved or deleted). Put them back or remove them from the project:", logSaved: "Full log:", allFiles: "All files",
+    hQueue: "Encoding took too long to start (heavy project). Try again; 720p or 480p is faster.", hMem: "Not enough memory for this export. Close other programs or choose 720p / 480p.",
+    hPerm: "Cannot write the output file. Close the video if it is open in a player, or choose another folder.", hFile: "A source file is unreadable or missing.", hCorrupt: "A source file looks corrupted or incomplete." }
 };
 let LANG = "fr";
 const M = (k, p) => { let s = (MSG[LANG] || MSG.fr)[k] || MSG.fr[k] || k; if (p) Object.keys(p).forEach(n => { s = s.replace("{" + n + "}", p[n]); }); return s; };

@@ -271,3 +271,6 @@ body.ai-mode .workspace,body.ai-mode .home,body.ai-mode .ed-only{display:none!im
 .ai-body .cap-styles{margin-top:6px}
 .home-ai{display:flex;align-items:center;gap:16px;width:100%;margin-top:14px;padding:18px 26px;border-radius:14px;border:1px solid var(--line);background:var(--panel2);color:var(--text);cursor:pointer;text-align:left}
 .home-ai:hover{border-color:#7b3dff}.home-ai .ai-ico{font-size:28px}.home-ai b{display:block;font-size:16px}.home-ai small{color:var(--muted);font-size:12px}
+
+#refreshBtn.spin svg{animation:evsSpin .9s linear infinite}@keyframes evsSpin{to{transform:rotate(360deg)}}#refreshBtn:disabled{opacity:.75;cursor:wait}
+.layer video{backface-visibility:hidden}

@@ -1,5 +1,12 @@
-# EcomVideoStudio — v1.8.0
+# EcomVideoStudio — v1.9.0
 Logiciel desktop de montage vidéo pour Windows 10+ (Electron + FFmpeg).
+
+## Nouveautés v1.9.0 / What's new
+- **Raccourcis clavier corrigés** (ils fonctionnent maintenant aussi sur un clavier **AZERTY**, quelle que soit la disposition) : **K** coupe le clip sélectionné à la tête de lecture, exactement comme le bouton « Couper » ; **Ctrl+Z** annule la dernière action (coupure, suppression, déplacement, effet…), plusieurs fois de suite — jusqu'à **100 actions** ; **Ctrl+Y** (ou Ctrl+Maj+Z) rétablit. Les raccourcis refonctionnent aussi juste après avoir modifié un réglage (cliquer ailleurs quitte le champ). **F5** = Actualiser.
+- **Bouton Actualiser renforcé** : recrée tous les lecteurs, vérifie que les fichiers existent encore, attend que l'image apparaisse, relance automatiquement un lecteur bloqué et, si besoin, abandonne une copie d'aperçu défectueuse pour lire le fichier original. L'icône tourne pendant l'opération et le bouton ne reste jamais bloqué. Message clair si un fichier est introuvable.
+- **Aperçu plus fluide et qui ne « plante » plus** : une erreur sur une piste n'arrête plus les autres, surveillance automatique (lecteur figé ou image noire → réparation automatique, puis actualisation complète en dernier recours), préchargement des clips suivants plus tôt, barre de lecture que l'on peut **faire glisser**, reprise automatique si le processus graphique ou la fenêtre plante (le projet en cours est rouvert), sauvegarde rapide après chaque action.
+- **Échecs d'export corrigés** : sur les projets lourds, la première image pouvait mettre plus de 30 s à sortir pendant que le son était déjà encodé, et FFmpeg s'arrêtait (« Conversion failed! »). L'export utilise maintenant une file d'attente élargie, vérifie les fichiers et leurs durées avant de démarrer et, en cas d'incident, **réessaie automatiquement en mode sécurisé sans rien retirer** de votre montage. Le message d'erreur affiche désormais la vraie cause (et un journal complet est enregistré).
+- **Mode IA / import audio : format MPEG** en plus du MP3 (voix off et musique) : `.mpeg`, `.mpg`, `.mpga`, `.mp2`, ainsi que `.wma` et `.opus`. Un fichier `.mpeg` qui ne contient que du son est reconnu comme audio ; une copie d'écoute mp3 légère est créée automatiquement (l'export utilise toujours le fichier original). Le montage manuel accepte aussi ces fichiers.
 
 ## Nouveautés v1.8.0 / What's new
 - **Raccourcis clavier** : **Ctrl+Z** annule jusqu'aux 10 dernières actions (Ctrl+Y ou Ctrl+Maj+Z pour rétablir) ; **K** coupe le clip sélectionné à la tête de lecture (vidéo, audio ou photo).
@@ -69,7 +76,7 @@ Logiciel desktop de montage vidéo pour Windows 10+ (Electron + FFmpeg).
 Déposez tout le contenu à la racine du dépôt, puis poussez sur `main`. Le workflow `.github/workflows/build-windows.yml` compile l'installateur (publication GitHub d'electron-builder désactivée : `--publish never`) et le met dans l'artefact `EcomVideoStudio-Windows` et dans une Release.
 
 ## Raccourcis
-Espace : lecture/pause • Suppr : supprimer le clip sélectionné.
+Espace : lecture/pause • Suppr : supprimer le clip sélectionné • K : couper • Ctrl+Z : annuler • Ctrl+Y : rétablir • ← → : déplacer la tête de lecture • F5 : actualiser.
 
 ## Développement local
 npm install

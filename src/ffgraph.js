@@ -49,7 +49,7 @@ function prepareClips(o) {
       if (prev) {
         const d = Math.max(0.2, Math.min(+c.trans.dur || 0.8, c.duration * 0.9));
         const pin = prev.inPoint || 0;
-        out.push(Object.assign({}, prev, { ghost: true, start: c.start, duration: d, inPoint: Math.max(pin, pin + prev.duration - 0.07), scale: c.scale, x: c.x, y: c.y, trans: null, _tr: t, _d: d }));
+        out.push(Object.assign({}, prev, { ghost: true, start: c.start, duration: d, inPoint: Math.max(pin, Math.min(pin + prev.duration - 0.07, prev.mediaDur > 0 ? prev.mediaDur - 0.12 : Infinity)), scale: c.scale, x: c.x, y: c.y, trans: null, _tr: t, _d: d }));
         c = Object.assign({}, c, { _tr: t, _d: d });
       }
     }
@@ -244,8 +244,18 @@ function buildExportArgs(o, res, burn, output) {
   if (graph.length > 12000 && o.writeGraph) args.push(o.graphFlag || '-filter_complex_script', o.writeGraph(graph), '-map', '[vout]'); // graphe long : fichier (limite de longueur de commande Windows)
   else args.push('-filter_complex', graph, '-map', '[vout]');
   if (ag) args.push('-map', `[${ag.label}]`, '-c:a', 'aac', '-b:a', '192k');
-  args.push('-c:v', 'libx264', '-preset', 'medium', '-crf', CRF[o.resolution] || '20',
-    '-pix_fmt', 'yuv420p', '-r', String(FPS), '-movflags', '+faststart', '-t', num(total), output);
+  // -max_muxing_queue_size : sur les projets lourds, la 1re image vidéo peut mettre longtemps à sortir pendant que l'audio est déjà encodé ;
+  // sans cette option FFmpeg s'arrête avec « Too many packets buffered for output stream » (échec d'export aléatoire).
+  args.push('-c:v', 'libx264', '-preset', o.light ? 'veryfast' : 'medium', '-crf', CRF[o.resolution] || '20',
+    '-pix_fmt', 'yuv420p', '-r', String(FPS), '-max_muxing_queue_size', '9999', '-movflags', '+faststart', '-t', num(total), output);
+  if (o.tolerant) { // mode tolérant : ignore les images corrompues des fichiers sources
+    const out = [];
+    for (let k = 0; k < args.length; k++) {
+      if (args[k] === '-i' && args[k + 1] && !/^color=/.test(String(args[k + 1]))) out.push('-err_detect', 'ignore_err', '-fflags', '+discardcorrupt');
+      out.push(args[k]);
+    }
+    return out;
+  }
   return args;
 }
 

@@ -1,7 +1,7 @@
 /* EcomVideoStudio — interface : 3 pistes vidéo, 3 pistes audio, légendes automatiques */
 const $ = id => document.getElementById(id);
 const LABEL = 96;
-const IMG_EXT = /\.(jpe?g|png|webp|bmp|gif)$/i, AUD_EXT = /\.(mp3|wav|aac|m4a|ogg|flac)$/i, VID_EXT = /\.(mp4|mov|mkv|avi|webm|m4v|wmv|flv|mpe?g|3gp)$/i;
+const IMG_EXT = /\.(jpe?g|png|webp|bmp|gif)$/i, AUD_EXT = /\.(mp3|mpga|mp2|wav|aac|m4a|ogg|opus|flac|wma)$/i, AUD_PROXY = /\.(mpe?g|mpga|mp2|wma|ac3|amr)$/i, VID_PROXY = /\.(mpe?g|avi|wmv|flv)$/i, VID_EXT = /\.(mp4|mov|mkv|avi|webm|m4v|wmv|flv|mpe?g|3gp)$/i;
 let uid = 0;
 const newId = () => "i" + Date.now().toString(36) + (uid++);
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -111,7 +111,7 @@ function takeStandbyAudio(A, c) {
 }
 function nextClip(kind, track, t, types) {
   let best = null;
-  state.clips.forEach(c => { if (c.kind === kind && c.track === track && c.start > t + 1e-6 && c.start - t < 2.5 && types.indexOf(c.type) >= 0 && (!best || c.start < best.start)) best = c; });
+  state.clips.forEach(c => { if (c.kind === kind && c.track === track && c.start > t + 1e-6 && c.start - t < 4 && types.indexOf(c.type) >= 0 && (!best || c.start < best.start)) best = c; });
   return best;
 }
 // Précharge les prochains clips (vidéo, fantôme de transition, audio) pendant que le clip courant joue
@@ -175,16 +175,23 @@ function applyTrans(L, c, t, force) {
     if (!L.gv.paused) L.gv.pause();
   }
 }
+let errCount = 0;
+function reportErr(e) { try { console.error(e); } catch (x) {} if (++errCount > 40) { errCount = 0; setTimeout(() => autoRefresh("err"), 0); } }
+setInterval(() => { errCount = 0; }, 10000);
 function syncMedia(force) {
   const t = P.t;
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 4; i++) { try { syncVideoLayer(i, t, force); } catch (e) { reportErr(e); } }
+  for (let i = 0; i < 3; i++) { try { syncAudioLane(i, t, force); } catch (e) { reportErr(e); } }
+}
+function syncVideoLayer(i, t, force) {
+  {
     const L = layers[i], c = clipAt("video", i, t), hid = !!state.trackHidden[i], mute = !!state.trackMuted[i];
     if (!c) {
       ps(L.wrap, "display", "none"); L.fxv.forEach(fv => { if (!fv.paused) fv.pause(); }); L.cur = null;
       const nx = nextClip("video", i, t, ["video"]);
       L.vs.forEach(v => { if (!v.paused) v.pause(); if (!nx) releaseEl(v); });
       if (!nx) { releaseEl(L.gv); L.gcur = null; }
-      continue;
+      return;
     }
     ps(L.wrap, "display", hid ? "none" : "block");
     if (isOv(c)) {
@@ -214,14 +221,17 @@ function syncMedia(force) {
       drive(L.v, c, t, force ? 0.05 : switched ? 0.2 : 0.45, mute);
     }
   }
-  for (let i = 0; i < 3; i++) {
+}
+function syncAudioLane(i, t, force) {
+  {
     const A = aEls[i], c = clipAt("audio", i, t), mute = !!state.audioMuted[i];
-    if (!c) { A.cur = null; const na = nextClip("audio", i, t, ["audio"]); A.as.forEach(a => { if (!a.paused) a.pause(); if (!na) releaseEl(a); }); continue; }
+    if (!c) { A.cur = null; const na = nextClip("audio", i, t, ["audio"]); A.as.forEach(a => { if (!a.paused) a.pause(); if (!na) releaseEl(a); }); return; }
     const switched = A.cur !== c.id; if (switched) takeStandbyAudio(A, c);
     A.cur = c.id; setSrc(A.a, pv(c));
     drive(A.a, c, t, force ? 0.05 : switched ? 0.2 : 0.45, mute);
   }
 }
+
 
 let lastPre = -9, pendingProxy = [], uiTick = 0, lastTimeTxt = "", lastCap = null;
 function play() {
@@ -231,7 +241,7 @@ function play() {
   syncMedia(true); preloadAhead(P.t); lastPre = P.t; requestAnimationFrame(tick);
 }
 function pause() {
-  P.stopAt = null; P.playing = false; $("play").textContent = "▶"; syncMedia();
+  P.stopAt = null; P.playing = false; $("play").textContent = "▶"; try { syncMedia(); } catch (e) { reportErr(e); }
   while (pendingProxy.length) pendingProxy.shift()();
 }
 function tick(now) {
@@ -239,8 +249,10 @@ function tick(now) {
   P.t += Math.min(0.1, (now - P.last) / 1000); P.last = now;
   if (P.t >= total()) { P.t = total(); pause(); updateUI(); return; }
   if (P.stopAt && P.t >= P.stopAt) { pause(); updateUI(); return; }
-  syncMedia(); updateUI(true);
-  if (P.t - lastPre > 0.3 || P.t < lastPre) { preloadAhead(P.t); lastPre = P.t; }
+  try {
+    syncMedia(); updateUI(true);
+    if (P.t - lastPre > 0.3 || P.t < lastPre) { preloadAhead(P.t); lastPre = P.t; }
+  } catch (e) { reportErr(e); }
   requestAnimationFrame(tick);
 }
 function seek(t) { P.t = clamp(t, 0, Math.max(total(), 0)); syncMedia(true); preloadAhead(P.t); lastPre = P.t; updateUI(); }
@@ -314,11 +326,14 @@ function updateUI(follow) {
 /* ---------- Médias ---------- */
 function typeOfPath(p) { return IMG_EXT.test(p) ? "image" : AUD_EXT.test(p) ? "audio" : VID_EXT.test(p) ? "video" : null; }
 // Copie légère (540p, images clés fréquentes) pour une lecture fluide des vidéos lourdes ; l'export utilise toujours l'original
+const noProxySet = new Set();   // médias dont la copie d'aperçu a posé problème (on lit alors l'original)
 function ensureProxy(m) {
-  if (noProxy || m.type !== "video" || m.proxy || m.proxyTried || Math.max(m.width || 0, m.height || 0) <= 960) return;
+  if (noProxy || m.proxy || m.proxyTried || noProxySet.has(m.id)) return;
+  const isAud = m.type === "audio";
+  if (isAud ? !AUD_PROXY.test(m.path) : (m.type !== "video" || (!VID_PROXY.test(m.path) && Math.max(m.width || 0, m.height || 0) <= 960))) return;
   m.proxyTried = true;
-  setStatus(`Optimisation de la lecture de « ${m.name} »…`);
-  window.ecom.makeProxy(m.path).then(p => {
+  setStatus(isAud ? L2(`Préparation de l'audio « ${m.name} »…`, `Preparing audio “${m.name}”…`) : `Optimisation de la lecture de « ${m.name} »…`);
+  (isAud ? window.ecom.makeAudioProxy(m.path) : window.ecom.makeProxy(m.path)).then(p => {
     if (!p) return;
     const apply = () => { m.proxy = p; state.clips.forEach(c => { if (c.mediaId === m.id) c.proxy = p; }); if (!P.playing) syncMedia(true); setStatus("Lecture optimisée"); };
     if (P.playing) pendingProxy.push(apply); else apply();
@@ -327,12 +342,15 @@ function ensureProxy(m) {
 async function importPaths(paths) {
   const out = [];
   for (const p of paths) {
-    const type = typeOfPath(p);
+    let type = typeOfPath(p);
     if (!type) { setStatus("Format non pris en charge : " + p.split(/[\\/]/).pop()); continue; }
     let m = state.media.find(x => x.path === p);
     if (!m) {
       setStatus("Analyse de " + p.split(/[\\/]/).pop() + "…");
       const info = await window.ecom.probe(p);
+      // .mpeg / .mpg : peut être une voix off (audio seul) ou une vidéo → on regarde le contenu réel du fichier
+      if (type === "video" && !info.hasVideo && info.hasAudio) type = "audio";
+      if (!info.hasVideo && !info.hasAudio && type !== "image") { setStatus(L2("Fichier illisible : ", "Unreadable file: ") + p.split(/[\\/]/).pop()); continue; }
       m = { id: newId(), path: p, name: p.split(/[\\/]/).pop(), type, duration: type === "image" ? 5 : (info.duration || 10), hasAudio: type === "audio" ? true : !!info.hasAudio, width: info.width, height: info.height };
       if (type === "video") m.thumb = await window.ecom.thumb(p, m.duration);
       state.media.push(m); ensureProxy(m);
@@ -440,20 +458,24 @@ function quickAdd(m) {
 }
 function deleteSelected() {
   const c = getSel(); if (!c) return setStatus("Sélectionnez un clip à supprimer.");
+  flushHistory();
   state.clips = state.clips.filter(x => x !== c); state.selected = null;
   renderTimeline(); renderProps(); syncMedia(true); updateUI(); setStatus("Clip supprimé");
+  flushHistory();
 }
 function splitAt(t) {
   const s = getSel();
   const inside = c => t > c.start + 0.05 && t < c.start + c.duration - 0.05;
   const targets = s && inside(s) ? [s] : state.clips.filter(inside);
   if (!targets.length) return setStatus("Placez la tête de lecture à l'intérieur d'un clip pour le couper.");
+  flushHistory();
   targets.forEach(c => {
     const d = t - c.start;
     state.clips.push({ ...c, id: newId(), start: t, inPoint: isStill(c) ? 0 : c.inPoint + d, duration: c.duration - d, trans: null, fx: (c.fx || []).slice(), ts: c.ts ? JSON.parse(JSON.stringify(c.ts)) : c.ts });
     c.duration = d;
   });
   renderTimeline(); syncMedia(true); setStatus("Clip coupé");
+  flushHistory();
 }
 
 /* ---------- Timeline ---------- */
@@ -1003,8 +1025,8 @@ async function generateCaptions() {
   if (currentPanel === "captions") { showPanel("captions"); $("capLang").value = lang; $("capSrc").value = src; $("capMsg").textContent = caps.length ? "✔ Légendes ajoutées à la piste CC. Cliquez sur une légende dans la timeline pour la modifier." : "Aucune parole détectée."; }
 }
 
-/* ---------- Historique : Ctrl+Z (10 actions) ---------- */
-const HIST_MAX = 10;
+/* ---------- Historique : Ctrl+Z (100 actions) ---------- */
+const HIST_MAX = 100, HIST_BYTES = 90e6;
 let undoStack = [], redoStack = [], lastSnap = "", histTimer = 0;
 function undoPart() {
   return JSON.stringify({ media: state.media, clips: state.clips, audioTracks: state.audioTracks, ratio: state.ratio, trackHidden: state.trackHidden, trackMuted: state.trackMuted, audioMuted: state.audioMuted, capStyle: state.capStyle, capPos: state.capPos },
@@ -1014,9 +1036,14 @@ function resetHistory() { clearTimeout(histTimer); undoStack = []; redoStack = [
 function commitHistory() {
   if (!editing || document.body.classList.contains("ai-mode")) return;
   const cur = undoPart(); if (cur === lastSnap) return;
-  undoStack.push(lastSnap); if (undoStack.length > HIST_MAX) undoStack.shift();
+  undoStack.push(lastSnap);
+  let sum = undoStack.reduce((a, x) => a + x.length, 0);
+  while (undoStack.length > HIST_MAX || (sum > HIST_BYTES && undoStack.length > 5)) sum -= undoStack.shift().length;
   redoStack = []; lastSnap = cur;
+  clearTimeout(histSave); histSave = setTimeout(() => { try { saveNow(false); } catch (e) {} }, 2000);   // sauvegarde rapide après chaque action (moins de perte en cas d'incident)
 }
+let histSave = 0;
+const flushHistory = () => { clearTimeout(histTimer); commitHistory(); };
 function scheduleCommit() { clearTimeout(histTimer); histTimer = setTimeout(commitHistory, 350); }
 function applySnap(json) {
   const o = JSON.parse(json); pause();
@@ -1091,12 +1118,15 @@ function resetEditorUI() {
 }
 function enterEditor() {
   editing = true; document.body.classList.remove("home-mode");
+  autoCount = 0;
+  try { localStorage.setItem("ecom-open-proj", state.id || ""); } catch (e) {}
   $("projName").value = state.name; lastSavedJson = snapshot(); setSaveInfo(false);
   resetEditorUI(); resetHistory();
 }
 async function showHome() {
   if (editing) { pause(); await saveNow(false); }
   editing = false; document.body.classList.add("home-mode"); renderHome();
+  try { localStorage.removeItem("ecom-open-proj"); } catch (e) {}
 }
 async function renderHome() {
   const list = await window.ecom.projList(), dir = await window.ecom.projDir();
@@ -1146,18 +1176,83 @@ async function importProjectFile() {
   await window.ecom.projSave(state.id, projMeta(), snapshot());
   enterEditor(); setStatus("Projet chargé");
 }
-// Actualiser : comme fermer puis rouvrir le projet (recrée les lecteurs vidéo/audio et réaffiche tout)
-async function refreshProject() {
-  if (!editing) return;
-  const t = P.t, sel = state.selected; pause();
-  await saveNow(false);
-  buildPlayers(); lastPre = -9; pendingProxy.length = 0;
-  state.media.forEach(m => { m.proxyTried = false; });
-  state.clips.forEach(c => { if (c.type === "text" && !c.img) regenText(c); });
-  resetEditorUI(); state.media.forEach(ensureProxy);
-  state.selected = sel; renderTimeline(); renderProps(); seek(t);
-  setStatus("Projet actualisé");
+// Actualiser : comme fermer puis rouvrir le projet. Recrée tous les lecteurs, vérifie les fichiers, attend que l'image soit bien là
+// et répare ce qui bloque (relance du lecteur, abandon d'une copie d'aperçu défectueuse). Jamais bloqué : le bouton se libère toujours.
+let refreshing = false, lastAuto = 0, autoCount = 0;
+const activeEls = () => {   // lecteurs qui doivent afficher / jouer quelque chose à l'instant courant
+  const out = [], t = P.t;
+  for (let i = 0; i < 4; i++) { const c = clipAt("video", i, t); if (c && !state.trackHidden[i] && !isStill(c)) out.push({ el: layers[i].v, c }); }
+  for (let i = 0; i < 3; i++) { const c = clipAt("audio", i, t); if (c) out.push({ el: aEls[i].a, c }); }
+  return out;
+};
+const notReady = () => activeEls().filter(x => x.el.dataset.src && (x.el.readyState < 2 || x.el.error));
+async function waitPreviewReady(ms) {
+  const end = performance.now() + ms;
+  while (performance.now() < end) { if (!notReady().length) return true; await new Promise(r => setTimeout(r, 120)); }
+  return !notReady().length;
 }
+function healEl(el) { el.removeAttribute("src"); el.dataset.src = ""; el.dataset.pre = ""; try { el.load(); } catch (e) {} syncMedia(true); }
+async function refreshProject(auto) {
+  if (!editing || refreshing) return;
+  refreshing = true;
+  const btn = $("refreshBtn"); btn.classList.add("spin"); btn.disabled = true;
+  const t = P.t, sel = state.selected; let note = "";
+  try {
+    pause();
+    try { await saveNow(false); } catch (e) {}
+    try { if (!stickerDir) stickerDir = await window.ecom.getStickerDir(); if (!fxDir) fxDir = await window.ecom.getFxDir(); } catch (e) {}
+    state.clips.forEach(c => { if (c.type === "sticker" && c.stickerId && stickerDir) c.path = stickerPath(c.stickerId); });
+    let missing = [];
+    try { const ps = [...new Set(state.media.map(m => m.path))], ok = await window.ecom.filesExist(ps); missing = ps.filter((p, i) => ok && ok[i] === false); } catch (e) {}
+    buildPlayers(); lastPre = -9; pendingProxy.length = 0; errCount = 0;
+    state.media.forEach(m => { m.proxyTried = false; });
+    state.clips.forEach(c => { if (c.type === "text" && !c.img) regenText(c); });
+    resetEditorUI();
+    state.selected = sel; renderTimeline(); renderProps(); seek(t);
+    // Contrôle : chaque lecteur utile doit avoir son image. Sinon : 1) relance du lecteur, 2) retour au fichier original (copie d'aperçu abandonnée)
+    let ok = await waitPreviewReady(3500);
+    for (let k = 0; k < 2 && !ok; k++) {
+      notReady().forEach(x => {
+        if (k === 1 && x.c.proxy) { const m = state.media.find(y => y.id === x.c.mediaId); if (m) { noProxySet.add(m.id); m.proxy = ""; } state.clips.forEach(c => { if (c.mediaId === x.c.mediaId) c.proxy = ""; }); }
+        healEl(x.el);
+      });
+      ok = await waitPreviewReady(3500);
+    }
+    state.media.forEach(ensureProxy);
+    seek(t);
+    if (missing.length) note = L2(" — ⚠ fichier introuvable : ", " — ⚠ file not found: ") + missing.slice(0, 2).map(p => p.split(/[\\/]/).pop()).join(", ") + (missing.length > 2 ? "…" : "");
+    else if (!ok) { const bad = notReady()[0]; note = L2(" — ⚠ impossible de lire « ", " — ⚠ cannot read “") + (bad ? bad.c.name : "") + L2(" » (format non supporté ?)", "” (unsupported format?)"); }
+    setStatus((auto ? L2("Aperçu réinitialisé automatiquement", "Preview reset automatically") : L2("Projet actualisé", "Project refreshed")) + note);
+  } catch (e) {
+    reportErr(e); setStatus(L2("Actualisation incomplète : ", "Refresh incomplete: ") + String(e && e.message || e).slice(0, 120));
+  } finally {
+    refreshing = false; btn.classList.remove("spin"); btn.disabled = false;
+  }
+}
+function autoRefresh() { const n = Date.now(); if (refreshing || !editing || autoCount >= 3 || n - lastAuto < 15000) return; lastAuto = n; autoCount++; refreshProject(true); }
+
+// Surveillance de l'aperçu (toutes les secondes) : lecteur bloqué, image figée ou erreur répétée → réparation automatique, puis actualisation complète si besoin
+function watchEl(v, active) {
+  const w = v._w || (v._w = { key: "", since: 0, lastT: -1, still: 0, heals: 0 }), key = v.dataset.src || "";
+  if (w.key !== key) { w.key = key; w.since = 0; w.lastT = -1; w.still = 0; w.heals = 0; }
+  if (!key || !active) { w.since = 0; w.still = 0; w.lastT = -1; return 0; }
+  const now = performance.now();
+  if (v.readyState < 2) { if (!w.since) w.since = now; if (now - w.since > 3500) { w.since = 0; w.heals++; healEl(v); return w.heals; } } else w.since = 0;
+  if (P.playing && !v.paused && !v.ended && v.readyState >= 2) {
+    if (v.currentTime === w.lastT) { if (++w.still >= 3) { w.still = 0; w.heals++; healEl(v); return w.heals; } } else w.still = 0;
+    w.lastT = v.currentTime;
+  } else { w.still = 0; w.lastT = -1; }
+  return 0;
+}
+setInterval(() => {
+  if (!editing || refreshing || document.hidden || document.body.classList.contains("ai-mode")) return;
+  try {
+    let worst = 0;
+    activeEls().forEach(x => { worst = Math.max(worst, watchEl(x.el, true)); });
+    if (worst >= 3) autoRefresh();
+  } catch (e) { reportErr(e); }
+}, 1000);
+window.ecom.onPreviewReset(() => { if (editing) autoRefresh(); });
 
 /* ---------- Export ---------- */
 function openExport() {
@@ -1192,7 +1287,7 @@ const AI_STEPS = ["Voix off", "Musique", "Images / vidéos", "Sous-titres", "Cr�
 const AI_TRANS = ["fade", "pushL", "zoomIn", "slideR"];
 function aiReset() {
   ai = { step: 1, mode: "text", text: "", lang: EcomI18n.lang() === "en" ? "en" : "fr", gender: "female", engine: "sapi", voiceFile: "", voiceName: "", voiceDur: 0,
-    music: "", musicName: "", musicDur: 0, musicVol: 20, media: [], capOn: true, capStyle: "classic", capPos: "bottom", quality: "1080", busy: false, exporting: false, done: null, pct: 0, stage: "", err: "" };
+    music: "", musicPreview: "", musicName: "", musicDur: 0, musicVol: 20, media: [], capOn: true, capStyle: "classic", capPos: "bottom", quality: "1080", busy: false, exporting: false, done: null, pct: 0, stage: "", err: "" };
 }
 function enterAI() {
   pause(); aiFrom = editing ? "editor" : "home";
@@ -1236,7 +1331,7 @@ function aiStep1() {
     <div class="ai-row"><div><label>Moteur de voix</label><br><select id="aiEngine"><option value="sapi"${ai.engine === "sapi" ? " selected" : ""}>Voix du logiciel (Windows, hors ligne, gratuit)</option><option value="gemini"${ai.engine === "gemini" ? " selected" : ""}>Voix IA naturelles (Gemini, en ligne, gratuit)</option></select></div>
     <div><button id="aiListen">▶ Écouter un extrait</button> <span class="ai-note" id="aiListenMsg"></span></div></div><div class="ai-note" id="aiNote">${aiNote()}</div>${ai.engine === "gemini" && !(capSettings.has && capSettings.has.gemini) ? `<div class="ai-row"><input type="password" id="aiGemKey" placeholder="Collez votre clé API Google Gemini ici" style="flex:1;min-width:240px"><button id="aiGemSave">Enregistrer la clé</button></div><div class="ai-note">Créez une clé gratuite sur aistudio.google.com/apikey</div>` : ""}`;
   } else {
-    body = `<button id="aiPickVoice" class="primary">📂 Choisir un fichier audio…</button>
+    body = `<button id="aiPickVoice" class="primary">📂 Choisir un fichier audio…</button> <span class="ai-note">Formats : mp3, mpeg, wav, m4a, aac, ogg, flac</span>
     ${ai.voiceFile ? `<div class="ai-file"><b>${esc(ai.voiceName)}</b><small>${fmt(ai.voiceDur)}</small></div>` : ""}
     ${ai.voiceDur > AI_MAX_VOICE ? `<div class="ai-note ai-warn">Maximum 1 min 30 : la voix sera coupée à 1:30.</div>` : ""}
     <div class="ai-row"><div><label>Langue parlée</label><br><select id="aiLang"><option value="fr"${ai.lang === "fr" ? " selected" : ""}>Français</option><option value="en"${ai.lang === "en" ? " selected" : ""}>English</option></select></div></div>
@@ -1247,10 +1342,10 @@ function aiStep1() {
 function aiStep2() {
   return `<h3>Étape 2 — Musique de fond</h3><div class="sub">Choisissez une musique enregistrée sur votre ordinateur, ou aucune musique.</div>
   <div class="ai-row"><div class="ai-card ${ai.music ? "" : "on"}" data-aimusic="none"><b>🚫 Aucune musique</b><small>Voix off seule</small></div>
-  <div class="ai-card ${ai.music ? "on" : ""}" data-aimusic="pick"><b>🎵 Choisir une musique</b><small>Depuis cet ordinateur (mp3, wav, m4a…)</small></div></div>
+  <div class="ai-card ${ai.music ? "on" : ""}" data-aimusic="pick"><b>🎵 Choisir une musique</b><small>Depuis cet ordinateur (mp3, mpeg, wav, m4a…)</small></div></div>
   ${ai.music ? `<div class="ai-file"><b>${esc(ai.musicName)}</b><small>${fmt(ai.musicDur)}</small></div>
   <div class="ai-row"><div style="flex:1"><label>Volume de la musique : <b id="aiVolTxt">${ai.musicVol}%</b></label><br><input type="range" id="aiVol" min="5" max="60" value="${ai.musicVol}" style="width:100%"></div></div>
-  <audio controls src="${fileUrl(ai.music)}" style="width:100%;margin-top:12px"></audio>
+  <audio controls src="${fileUrl(ai.musicPreview || ai.music)}" style="width:100%;margin-top:12px"></audio>
   <div class="ai-note">Si la musique est plus courte que la vidéo, elle est répétée automatiquement.</div>` : ""}`;
 }
 function aiStep3() {
@@ -1306,7 +1401,19 @@ function aiProg(pct, stage) {
 }
 async function aiPickFile(kind) {
   const paths = await window.ecom.openMedia(kind); if (!paths.length) return null;
-  const info = await window.ecom.probe(paths[0]); return { path: paths[0], name: aiBase(paths[0]), dur: info.duration || 0 };
+  setStatus(L2("Analyse de ", "Analyzing ") + aiBase(paths[0]) + "…");
+  const info = await window.ecom.probe(paths[0]);
+  // mp3, mpeg, wav, m4a… : si le fichier ne contient pas de son lisible, on le dit clairement
+  if (!info.hasAudio || !(info.duration > 0)) {
+    const msg = L2("Ce fichier ne contient pas d'audio lisible : ", "This file has no readable audio: ") + aiBase(paths[0]);
+    setStatus(msg); const b = $("aiBody"); if (b) b.insertAdjacentHTML("beforeend", `<div class="ai-note ai-warn">${esc(msg)}</div>`);
+    return null;
+  }
+  // mpeg / wma… : Chromium ne sait pas les lire dans le lecteur d'écoute → copie mp3 légère pour l'écoute (le montage utilise toujours l'original)
+  let preview = "";
+  if (AUD_PROXY.test(paths[0])) { try { setStatus(L2("Préparation de l'audio…", "Preparing audio…")); preview = await window.ecom.makeAudioProxy(paths[0]); } catch (e) {} }
+  setStatus(L2("Prêt", "Ready"));
+  return { path: paths[0], name: aiBase(paths[0]), dur: info.duration || 0, preview };
 }
 async function aiAddVisuals() {
   const room = AI_MAX_MEDIA - ai.media.length; if (room <= 0) return;
@@ -1446,7 +1553,7 @@ function initAI() {
     else if (q("#aiListen")) aiListen();
     else if (q("#aiGemSave")) { const k = $("aiGemKey").value.trim(); if (k) { await window.ecom.setSettings({ provider: "gemini", key: k }); capSettings = await window.ecom.getSettings(); aiRender(); } }
     else if (q("#aiPickVoice")) { const f = await aiPickFile("audio"); if (f) { ai.voiceFile = f.path; ai.voiceName = f.name; ai.voiceDur = f.dur; aiRender(); } }
-    else if ((el = q("[data-aimusic]"))) { if (el.dataset.aimusic === "none") { ai.music = ""; ai.musicName = ""; ai.musicDur = 0; aiRender(); } else { const f = await aiPickFile("audio"); if (f) { ai.music = f.path; ai.musicName = f.name; ai.musicDur = f.dur; aiRender(); } } }
+    else if ((el = q("[data-aimusic]"))) { if (el.dataset.aimusic === "none") { ai.music = ""; ai.musicName = ""; ai.musicDur = 0; ai.musicPreview = ""; aiRender(); } else { const f = await aiPickFile("audio"); if (f) { ai.music = f.path; ai.musicName = f.name; ai.musicDur = f.dur; ai.musicPreview = f.preview || ""; aiRender(); } } }
     else if (q("#aiPickMedia") || q("[data-aiadd]")) aiAddVisuals();
     else if ((el = q("[data-aidel]"))) { ai.media.splice(+el.dataset.aidel, 1); ai.err = ""; aiRender(); }
     else if ((el = q("[data-aimv]"))) { const [i, d] = el.dataset.aimv.split(":").map(Number), j = i + d; if (ai.media[j]) { [ai.media[i], ai.media[j]] = [ai.media[j], ai.media[i]]; aiRender(); } }
@@ -1483,9 +1590,16 @@ $("splitBtn").onclick = () => splitAt(P.t);
 $("deleteBtn").onclick = deleteSelected;
 $("addAudioTrack").onclick = addAudioTrack;
 $("zoom").oninput = e => { state.pps = +e.target.value; renderTimeline(); };
-$("scrub").onclick = e => { const r = $("scrub").getBoundingClientRect(); seek(((e.clientX - r.left) / r.width) * total()); };
+$("scrub").onmousedown = e => {
+  e.preventDefault(); const sc = $("scrub"), was = P.playing; if (was) pause();
+  let busy = false, lastX = e.clientX;
+  const go = () => { busy = false; const r = sc.getBoundingClientRect(); seek(((lastX - r.left) / r.width) * total()); };
+  const mv = ev => { lastX = ev.clientX; if (!busy) { busy = true; requestAnimationFrame(go); } };
+  const up = () => { window.removeEventListener("mousemove", mv); window.removeEventListener("mouseup", up); go(); if (was) play(); };
+  window.addEventListener("mousemove", mv); window.addEventListener("mouseup", up); go();
+};
 $("saveProject").onclick = () => saveNow(true);
-$("homeBtn").onclick = showHome; $("refreshBtn").onclick = refreshProject; $("themeBtn").onclick = () => setTheme(document.documentElement.dataset.theme === "light" ? "dark" : "light");
+$("homeBtn").onclick = showHome; $("refreshBtn").onclick = () => refreshProject(); $("themeBtn").onclick = () => setTheme(document.documentElement.dataset.theme === "light" ? "dark" : "light");
 $("homeNew").onclick = createProject; $("homeOpen").onclick = importProjectFile; $("homeFolder").onclick = () => window.ecom.openFolder();
 $("homeList").onclick = e => { const d = e.target.closest("[data-pdel]"); if (d) { e.stopPropagation(); deleteProject(d.dataset.pdel); return; } const c = e.target.closest(".pcard"); if (c) openProjectById(c.dataset.pid); };
 $("projName").oninput = e => { state.name = e.target.value; };
@@ -1518,12 +1632,27 @@ leftPanel.addEventListener("drop", async e => { if (e.dataTransfer.files.length)
 window.addEventListener("dragover", e => e.preventDefault());
 window.addEventListener("drop", e => e.preventDefault());
 document.addEventListener("mouseup", () => { const a = document.activeElement; if (a && a.type === "range") a.blur(); });
+// Touche par son caractère (et non sa position physique) : Ctrl+Z / K fonctionnent aussi sur un clavier AZERTY
+const keyIs = (e, ch) => { const k = String(e.key || "").toLowerCase(); return /^[a-z]$/.test(k) ? k === ch : e.code === "Key" + ch.toUpperCase(); };
+// Clic ailleurs dans l'interface : on quitte le champ de saisie, pour que les raccourcis (K, Ctrl+Z…) refonctionnent aussitôt
+document.addEventListener("mousedown", e => {
+  const a = document.activeElement; if (!a || a === document.body || a === e.target) return;
+  const typ = String(a.type || "").toLowerCase();
+  if ((a.tagName === "TEXTAREA" || (a.tagName === "INPUT" && !/^(range|checkbox|radio|button|color|file)$/.test(typ))) && !a.contains(e.target)) a.blur();
+}, true);
 window.addEventListener("keydown", e => {
-  if (document.body.classList.contains("home-mode") || document.body.classList.contains("ai-mode") || !$("confirmModal").classList.contains("hidden")) return;
-  if (/INPUT|SELECT|TEXTAREA/.test(e.target.tagName) && e.target.type !== "range") return;
-  if ((e.ctrlKey || e.metaKey) && e.code === "KeyZ" && !e.shiftKey) { e.preventDefault(); undo(); return; }
-  if ((e.ctrlKey || e.metaKey) && (e.code === "KeyY" || (e.code === "KeyZ" && e.shiftKey))) { e.preventDefault(); redo(); return; }
-  if (e.code === "KeyK" && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); if (!e.repeat) splitAt(P.t); return; }
+  if (document.body.classList.contains("home-mode") || document.body.classList.contains("ai-mode") || !$("confirmModal").classList.contains("hidden") || !$("exportModal").classList.contains("hidden")) return;
+  const tg = e.target || {}, tag = tg.tagName || "", typ = String(tg.type || "").toLowerCase();
+  const typing = tag === "TEXTAREA" || !!tg.isContentEditable || (tag === "INPUT" && !/^(range|checkbox|radio|button|color|file|submit|reset)$/.test(typ));
+  const ctl = typing || tag === "SELECT" || (tag === "INPUT" && typ !== "range");
+  const mod = e.ctrlKey || e.metaKey;
+  if (!typing) {
+    if (mod && !e.altKey && keyIs(e, "z") && !e.shiftKey) { e.preventDefault(); undo(); return; }
+    if (mod && !e.altKey && (keyIs(e, "y") || (keyIs(e, "z") && e.shiftKey))) { e.preventDefault(); redo(); return; }
+    if (!mod && !e.altKey && keyIs(e, "k")) { e.preventDefault(); if (!e.repeat) splitAt(P.t); return; }
+    if (e.key === "F5") { e.preventDefault(); refreshProject(); return; }
+  }
+  if (ctl) return;
   if (e.code === "ArrowLeft" || e.code === "ArrowRight") {
     e.preventDefault();
     const step = e.shiftKey ? 1 / 30 : 1;
@@ -1552,3 +1681,9 @@ window.ecom.getLang().then(l => setLanguage(l, false));
 
 setTheme(document.documentElement.dataset.theme || "dark");
 renderHome();
+
+window.ecom.consumeCrash().then(async c => {
+  if (!c) return;
+  let id = ""; try { id = localStorage.getItem("ecom-open-proj") || ""; } catch (e) {}
+  if (id) { await openProjectById(id); setStatus(L2("Le logiciel s'est rétabli après un incident : votre projet a été rouvert.", "The app recovered from a problem: your project was reopened.")); }
+}).catch(() => {});
