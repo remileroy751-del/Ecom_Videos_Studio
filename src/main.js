@@ -434,8 +434,12 @@ ipcMain.handle("transcribe", async (_, o) => {
 
 // ---------- Mode IA : voix off (synthèse vocale), détection des silences, chemins ----------
 const voicesDir = () => path.join(baseDir(), "Voix");
-ipcMain.handle("next-export-path", (_, prefix) => {
+ipcMain.handle("next-export-path", (_, prefix, name) => {
   ensureFolders();
+  // nom choisi par l'utilisateur (fenêtre « Nommer votre vidéo ») : caractères interdits retirés, jamais d'écrasement d'un fichier existant
+  let clean = String(name || "").replace(/\.mp4$/i, "").replace(/[<>:"\/\\|?*\x00-\x1f]/g, "").replace(/\s+/g, " ").trim().replace(/[. ]+$/, "").slice(0, 80);
+  if (/^(con|prn|aux|nul|com\d|lpt\d)$/i.test(clean)) clean = "_" + clean;
+  if (clean) { let f = path.join(exportDir(), clean + ".mp4"), n = 2; while (fs.existsSync(f)) f = path.join(exportDir(), `${clean} (${n++}).mp4`); return f; }
   const d = new Date(), p2 = n => String(n).padStart(2, "0");
   const stamp = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}`;
   return path.join(exportDir(), `${String(prefix || "Export").replace(/[^A-Za-z0-9_-]/g, "")}-${stamp}.mp4`);
@@ -512,7 +516,7 @@ async function geminiSpeak(text, gender, outWav) {
 }
 // o : { text, lang: "fr"|"en", gender: "female"|"male", engine: "sapi"|"gemini", preview }
 ipcMain.handle("tts-synth", async (_, o) => {
-  const text = String(o.text || "").replace(/\s+/g, " ").trim().slice(0, o.preview ? 160 : 900);
+  const text = String(o.text || "").replace(/\s+/g, " ").trim().slice(0, o.preview ? 160 : 1000);
   if (!text) return { ok: false, error: "Texte vide." };
   const gender = o.gender === "male" ? "male" : "female", lang = o.lang === "en" ? "en" : "fr";
   let outDir = o.preview ? os.tmpdir() : voicesDir();

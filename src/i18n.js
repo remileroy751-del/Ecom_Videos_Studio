@@ -5,7 +5,7 @@
     /* --- barre du haut / général --- */
     "Professional Desktop Editor": "Professional Desktop Editor", "＋ Nouveau": "＋ New", "Ouvrir": "Open", "Sauvegarder": "Save", "Exporter": "Export",
     "Médias": "Media", "Texte": "Text", "Stickers": "Stickers", "Légendes": "Captions", "Effets": "Effects", "Transitions": "Transitions", "Paramètres": "Settings",
-    "Importer": "Import", "Prêt": "Ready", "Langue / Language": "Language / Langue",
+    "Importer": "Import", "Prêt": "Ready", "🧲 Aimant": "🧲 Magnet", "Nommer votre vidéo": "Name your video", "Donnez un nom à votre vidéo, ou gardez le nom proposé, puis validez pour lancer le montage automatique.": "Give your video a name, or keep the suggested one, then confirm to start the automatic edit.", "✔ Valider": "✔ Confirm", "Annuler": "Cancel", "Langue / Language": "Language / Langue",
     "Créé par Ecom Academy • Mail : ecom.academy.tg@gmail.com": "Created by Ecom Academy • Mail: ecom.academy.tg@gmail.com",
     "Format de la vidéo": "Video format", "Importez des médias puis glissez-les sur la timeline": "Import media, then drag it onto the timeline",
     "✂ Couper": "✂ Split", "🗑 Supprimer": "🗑 Delete", "＋ Ajouter piste audio": "＋ Add audio track",
@@ -129,7 +129,7 @@
     "Mode IA": "AI Mode", "Crée des short vidéos automatiques": "Create automatic short videos", "← Retour au montage manuel": "← Back to manual editing",
     "✨ Mode IA — Short vidéo automatique": "✨ AI Mode — Automatic short video", "9:16 • 90 s max": "9:16 • 90 s max", "Précédent": "Previous", "Suivant": "Next", "Suivant →": "Next →", "✨ Créer la vidéo": "✨ Create the video",
     "Voix off": "Voice-over", "Musique": "Music", "Images / vidéos": "Images / videos", "Sous-titres": "Subtitles", "Création": "Creation",
-    "Étape 1 — Votre voix off": "Step 1 — Your voice-over", "Écrivez un script (900 caractères maximum) et choisissez une voix, ou ajoutez votre propre voix off (1 min 30 maximum).": "Write a script (900 characters maximum) and choose a voice, or add your own voice-over (1 min 30 maximum).",
+    "Étape 1 — Votre voix off": "Step 1 — Your voice-over", "Écrivez un script (1000 caractères maximum) et choisissez une voix, ou ajoutez votre propre voix off (1 min 30 maximum).": "Write a script (1000 characters maximum) and choose a voice, or add your own voice-over (1 min 30 maximum).",
     "✍️ Écrire un script": "✍️ Write a script", "🎙️ Ajouter ma voix off": "🎙️ Add my voice-over", "Collez ou écrivez ici le texte de votre short vidéo…": "Paste or write the text of your short video here…",
     "Langue de la voix": "Voice language", "👩 Voix féminine": "👩 Female voice", "Voix off féminine": "Female voice-over", "👨 Voix masculine": "👨 Male voice", "Voix off masculine": "Male voice-over", "Moteur de voix": "Voice engine",
     "Voix du logiciel (Windows, hors ligne, gratuit)": "Built-in voices (Windows, offline, free)", "Voix IA naturelles (Gemini, en ligne, gratuit)": "Natural AI voices (Gemini, online, free)",

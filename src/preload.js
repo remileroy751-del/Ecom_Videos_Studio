@@ -9,7 +9,7 @@ contextBridge.exposeInMainWorld("ecom", {
   projDelete: id => ipcRenderer.invoke("proj-delete", id),
   projDir: () => ipcRenderer.invoke("proj-dir"),
   openFolder: () => ipcRenderer.invoke("open-folder"),
-  nextExportPath: p => ipcRenderer.invoke("next-export-path", p),
+  nextExportPath: (p, n) => ipcRenderer.invoke("next-export-path", p, n),
   revealFile: f => ipcRenderer.invoke("reveal-file", f),
   detectSilence: f => ipcRenderer.invoke("detect-silence", f),
   ttsVoices: () => ipcRenderer.invoke("tts-voices"),

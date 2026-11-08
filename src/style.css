@@ -274,3 +274,7 @@ body.ai-mode .workspace,body.ai-mode .home,body.ai-mode .ed-only{display:none!im
 
 #refreshBtn.spin svg{animation:evsSpin .9s linear infinite}@keyframes evsSpin{to{transform:rotate(360deg)}}#refreshBtn:disabled{opacity:.75;cursor:wait}
 .layer video{backface-visibility:hidden}
+
+#magnetBtn.on{background:var(--blue);color:#fff;border-color:var(--blue)}
+.clip.selected{outline:2px solid #fff;outline-offset:-2px}
+#renameInput{width:100%;box-sizing:border-box;margin:12px 0 18px;padding:11px 12px;font-size:14px}

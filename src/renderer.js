@@ -10,7 +10,7 @@ function fileUrl(p) { return encodeURI("file:///" + p.replace(/\\/g, "/")).repla
 function fmt(s, dec) { s = Math.max(0, s || 0); const m = Math.floor(s / 60), r = s - m * 60; return String(m).padStart(2, "0") + ":" + (dec ? r.toFixed(1).padStart(4, "0") : String(Math.floor(r)).padStart(2, "0")); }
 
 let state = freshState();
-function freshState() { return { media: [], clips: [], audioTracks: 1, captions: [], selected: null, resolution: "1080", ratio: "16:9", id: "", name: "", created: 0, pps: 40, trackHidden: [false, false, false, false], trackMuted: [false, false, false, false], audioMuted: [false, false, false], capStyle: "classic", capPos: "bottom" }; }
+function freshState() { return { media: [], clips: [], audioTracks: 1, captions: [], selected: null, resolution: "1080", ratio: "16:9", id: "", name: "", created: 0, pps: 40, trackHidden: [false, false, false, false], trackMuted: [false, false, false, false], audioMuted: [false, false, false], capStyle: "classic", capPos: "bottom", magnet: true }; }
 const isStill = c => c.type === "image" || c.type === "sticker" || c.type === "text";
 const isOv = c => c.type === "sticker" || c.type === "text";
 let stickerDir = "", fxDir = "", fxCat = "all";
@@ -24,6 +24,11 @@ let mediaFilter = "all", currentPanel = "media", resolution = "1080", capSetting
 const setStatus = m => { $("status").textContent = m; };
 const total = () => state.clips.reduce((m, c) => Math.max(m, c.start + c.duration), 0);
 const getSel = () => state.clips.find(c => c.id === state.selected);
+// Sélection multiple (Ctrl+clic, Ctrl+A) : multiSel contient tous les clips sélectionnés ; state.selected reste le clip « principal »
+let multiSel = new Set();
+const isMulti = () => multiSel.size > 1 && multiSel.has(state.selected);
+const isSel = c => c.id === state.selected || (isMulti() && multiSel.has(c.id));
+const selClips = () => isMulti() ? state.clips.filter(c => multiSel.has(c.id)) : (getSel() ? [getSel()] : []);
 const clipAt = (kind, track, t) => state.clips.find(c => c.kind === kind && c.track === track && t >= c.start - 1e-6 && t < c.start + c.duration - 1e-6);
 
 /* ---------- Aperçu : 3 couches vidéo (double tampon) + 3 pistes audio (double tampon) ---------- */
@@ -271,7 +276,7 @@ function clipRect(c) {
 }
 function updateSelBox() {
   const b = $("selBox"), c = getSel();
-  if (!c || c.kind !== "video" || state.trackHidden[c.track] || P.t < c.start - 1e-6 || P.t >= c.start + c.duration) { b.style.display = "none"; return; }
+  if (!c || isMulti() || c.kind !== "video" || state.trackHidden[c.track] || P.t < c.start - 1e-6 || P.t >= c.start + c.duration) { b.style.display = "none"; return; }
   const r = clipRect(c);
   b.style.display = "block"; b.style.left = (r.cx - r.w / 2) + "px"; b.style.top = (r.cy - r.h / 2) + "px"; b.style.width = r.w + "px"; b.style.height = r.h + "px";
 }
@@ -304,7 +309,7 @@ function initFrameEditing() {
     if (e.target.id === "selBox" && c) return startMove(e, c);
     const rect = $("frame").getBoundingClientRect(), px = e.clientX - rect.left, py = e.clientY - rect.top;
     const hit = [3, 2, 1, 0].filter(tr => !state.trackHidden[tr]).map(tr => clipAt("video", tr, P.t)).filter(Boolean).find(cl => { const r = clipRect(cl); return Math.abs(px - r.cx) <= r.w / 2 && Math.abs(py - r.cy) <= r.h / 2; });
-    if (hit) { state.selected = hit.id; renderTimeline(); renderProps(); updateUI(); startMove(e, hit); }
+    if (hit) { multiSel.clear(); state.selected = hit.id; renderTimeline(); renderProps(); updateUI(); startMove(e, hit); }
     else if (state.selected) { state.selected = null; renderTimeline(); renderProps(); updateUI(); }
   });
   window.addEventListener("resize", updateSelBox);
@@ -385,7 +390,7 @@ async function deleteMedia(id) {
   const used = state.clips.filter(c => c.mediaId === m.id || (c.path && c.path === m.path && c.type !== "text" && c.type !== "sticker"));
   if (used.length) { const ok = await askYesNo("Supprimer le média", "Ce média se trouve dans le montage. Supprimer ?"); if (!ok) return; }
   pause();
-  state.clips = state.clips.filter(c => used.indexOf(c) < 0);
+  state.clips = state.clips.filter(c => used.indexOf(c) < 0); magnetMain();
   state.media = state.media.filter(x => x !== m);
   if (used.some(c => c.id === state.selected)) state.selected = null;
   P.t = clamp(P.t, 0, total());
@@ -408,7 +413,8 @@ function addClip(m, kind, track, time, extra) {
   }
   const c = { id: newId(), mediaId: m.id, kind, track, type: kind === "audio" ? "audio" : m.type, path: m.path, name: m.name, start, inPoint: 0, duration: dur, mediaDur: m.type === "image" ? 0 : dur, scale: 100, x: 0, y: 0, volume: 100, hasAudio: kind === "audio" ? true : !!m.hasAudio, proxy: m.proxy || "", thumb: m.thumb || "", fit: "fit", fx: [], adj: {}, srcW: m.width || 0, srcH: m.height || 0 };
   if (extra) Object.assign(c, extra);
-  state.clips.push(c); state.selected = c.id;
+  state.clips.push(c); state.selected = c.id; multiSel.clear();
+  if (kind === "video" && track === 0 && (c.type === "video" || c.type === "image")) magnetMain();
   if (!P.playing) P.t = c.start;
   renderTimeline(); renderProps(); syncMedia(true); updateUI();
   setStatus(`« ${m.name} » ajouté sur ${kind === "video" ? "V" + (track + 1) : "A" + (track + 1)}`);
@@ -456,17 +462,47 @@ function quickAdd(m) {
   const v = state.clips.filter(c => c.kind === "video" && c.track === 0);
   return addClip(m, "video", 0, v.reduce((x, c) => Math.max(x, c.start + c.duration), 0));
 }
+// Aimant de la piste principale (V1) : les photos / vidéos se collent à gauche, sans trou, comme dans CapCut
+function magnetMain() {
+  if (state.magnet === false) return false;
+  const isMv = c => c.kind === "video" && c.track === 0;
+  const arr = state.clips.filter(c => isMv(c) && (c.type === "video" || c.type === "image")).sort((x, y) => x.start - y.start);
+  const others = state.clips.filter(c => isMv(c) && c.type !== "video" && c.type !== "image");
+  let cur = 0, changed = false;
+  arr.forEach(c => {
+    if (c.start > cur + 1e-6) {
+      const free = !others.some(o => cur < o.start + o.duration - 1e-6 && cur + c.duration > o.start + 1e-6);   // ne jamais passer sur un texte / sticker posé sur V1
+      if (free) { c.start = cur; changed = true; }
+    }
+    cur = Math.max(cur, c.start + c.duration);
+  });
+  return changed;
+}
+function updateMagnetBtn() {
+  const b = $("magnetBtn"); if (!b) return;
+  const on = state.magnet !== false; b.classList.toggle("on", on);
+  b.title = on ? L2("Aimant de la piste principale : activé (les clips se collent à gauche, sans trou). Cliquez pour désactiver.", "Main track magnet: on (clips snap left, no gaps). Click to turn off.")
+    : L2("Aimant de la piste principale : désactivé. Cliquez pour activer.", "Main track magnet: off. Click to turn on.");
+}
+function selectAll() {
+  if (!state.clips.length) return setStatus(L2("Aucun clip à sélectionner.", "No clip to select."));
+  multiSel = new Set(state.clips.map(c => c.id)); state.selected = state.clips[0].id;
+  renderTimeline(); renderProps(); updateUI();
+  setStatus(L2(`${state.clips.length} clip(s) sélectionné(s) — glissez-en un pour tout déplacer, ou Suppr pour tout supprimer`, `${state.clips.length} clip(s) selected — drag one to move all, or press Delete to remove all`));
+}
 function deleteSelected() {
-  const c = getSel(); if (!c) return setStatus("Sélectionnez un clip à supprimer.");
+  const sel = selClips(); if (!sel.length) return setStatus("Sélectionnez un clip à supprimer.");
   flushHistory();
-  state.clips = state.clips.filter(x => x !== c); state.selected = null;
-  renderTimeline(); renderProps(); syncMedia(true); updateUI(); setStatus("Clip supprimé");
+  const ids = new Set(sel.map(c => c.id));
+  state.clips = state.clips.filter(x => !ids.has(x.id)); state.selected = null; multiSel.clear();
+  magnetMain(); P.t = clamp(P.t, 0, total());
+  renderTimeline(); renderProps(); syncMedia(true); updateUI(); setStatus(sel.length > 1 ? L2(`${sel.length} clips supprimés`, `${sel.length} clips deleted`) : "Clip supprimé");
   flushHistory();
 }
 function splitAt(t) {
-  const s = getSel();
   const inside = c => t > c.start + 0.05 && t < c.start + c.duration - 0.05;
-  const targets = s && inside(s) ? [s] : state.clips.filter(inside);
+  const ss = selClips().filter(inside);
+  const targets = ss.length ? ss : state.clips.filter(inside);
   if (!targets.length) return setStatus("Placez la tête de lecture à l'intérieur d'un clip pour le couper.");
   flushHistory();
   targets.forEach(c => {
@@ -501,7 +537,7 @@ function renderTimeline() {
   const clipHtml = (kind, track) => state.clips.filter(c => c.kind === kind && c.track === track).map(c => {
     const icon = c.type === "text" ? "T" : c.type === "sticker" ? "☺" : c.type === "image" ? "🖼" : c.kind === "audio" ? "♫" : "🎬";
     const bg = c.type === "text" ? "" : c.type === "sticker" ? `;background-image:url('${fileUrl(c.path)}');background-size:auto 78%;background-repeat:no-repeat;background-position:28px center` : c.type === "image" ? `;background-image:linear-gradient(rgba(8,12,24,.45),rgba(8,12,24,.45)),url('${fileUrl(c.path)}');background-size:auto 100%;background-repeat:repeat-x` : c.thumb ? `;background-image:linear-gradient(rgba(8,12,24,.5),rgba(8,12,24,.5)),url('${c.thumb}');background-size:auto 100%;background-repeat:repeat-x` : "";
-    return `<div class="clip ${c.kind} ${c.type}${c.id === state.selected ? " selected" : ""}${c.id === dragId ? " dragging" : ""}" data-id="${c.id}" style="left:${c.start * pps}px;width:${Math.max(8, c.duration * pps)}px${bg}"><i class="h hl"></i>${c.trans && prevAdj(c) ? '<i class="tbadge">⇋</i>' : ""}<span class="cname">${icon} ${esc(c.name)}</span><i class="h hr"></i></div>`;
+    return `<div class="clip ${c.kind} ${c.type}${isSel(c) ? " selected" : ""}${c.id === dragId ? " dragging" : ""}" data-id="${c.id}" style="left:${c.start * pps}px;width:${Math.max(8, c.duration * pps)}px${bg}"><i class="h hl"></i>${c.trans && prevAdj(c) ? '<i class="tbadge">⇋</i>' : ""}<span class="cname">${icon} ${esc(c.name)}</span><i class="h hr"></i></div>`;
   }).join("");
   let h = `<div class="tl-inner" style="width:${LABEL + width}px"><div class="ruler-row"><div class="tlabel corner"></div><div class="ruler" id="ruler" style="width:${width}px">${ticks}</div></div>`;
   for (let v = 3; v >= 0; v--) h += `<div class="track-row video${state.trackHidden[v] ? " hid" : ""}${state.trackMuted[v] ? " mut" : ""}"><div class="tlabel"><span class="tn">${v === 3 ? "CC" : "V" + (v + 1)}</span>${trackBtns("video", v)}</div><div class="lane" data-kind="video" data-track="${v}" style="width:${width}px">${clipHtml("video", v)}</div></div>`;
@@ -538,6 +574,7 @@ function startDrag(e, clip, mode) {
   e.preventDefault();
   const x0 = e.clientX, y0 = e.clientY, o = { start: clip.start, inPoint: clip.inPoint, duration: clip.duration };
   let moved = false, el = null;
+  const group = mode === "move" && isMulti() && multiSel.has(clip.id) ? selClips() : null, gOrig = group ? group.map(c => c.start) : null;
   const mm = ev => {
     if (!moved) {
       if (Math.hypot(ev.clientX - x0, ev.clientY - y0) < 4) return;
@@ -546,7 +583,15 @@ function startDrag(e, clip, mode) {
       document.body.classList.add("dragging-clip");
     }
     const dx = (ev.clientX - x0) / state.pps, pps = state.pps;
-    if (mode === "move") {
+    if (group) {   // déplacement de toute la sélection, d'un seul bloc (les pistes sont conservées)
+      const minS = Math.min(...gOrig), ids = new Set(group.map(c => c.id)), th = 9 / pps;
+      let d = Math.max(dx, -minS), bd = th, best = d;
+      const cands = [0, P.t]; state.clips.forEach(c => { if (!ids.has(c.id)) cands.push(c.start, c.start + c.duration); });
+      cands.forEach(cd => { const d1 = Math.abs(minS + d - cd); if (d1 < bd) { bd = d1; best = cd - minS; } });
+      d = Math.max(best, -minS);
+      const clash = group.some((c, k) => state.clips.some(x => !ids.has(x.id) && x.kind === c.kind && x.track === c.track && gOrig[k] + d < x.start + x.duration - 1e-6 && gOrig[k] + d + c.duration > x.start + 1e-6));
+      if (!clash) group.forEach((c, k) => { c.start = gOrig[k] + d; const ce = document.querySelector(`.clip[data-id="${c.id}"]`); if (ce) ce.style.left = c.start * pps + "px"; });
+    } else if (mode === "move") {
       const ns = snapTime(clip, Math.max(0, o.start + dx), clip.duration); let track = clip.track;
       const lane = document.elementsFromPoint(ev.clientX, ev.clientY).find(x => x.classList && x.classList.contains("lane") && x.dataset.kind === clip.kind && !x.dataset.new && !(+x.dataset.track === 3 && clip.kind === "video" && !isOv(clip)));
       if (lane) track = +lane.dataset.track;
@@ -570,7 +615,8 @@ function startDrag(e, clip, mode) {
   const mu = () => {
     window.removeEventListener("mousemove", mm); window.removeEventListener("mouseup", mu);
     document.body.classList.remove("dragging-clip");
-    if (moved) { if (mode === "move") resolveOverlap(clip); dragId = null; renderTimeline(); renderProps(); syncMedia(true); updateUI(); }
+    if (moved) { if (mode === "move" && !group) resolveOverlap(clip); if (!group) magnetMain(); dragId = null; renderTimeline(); renderProps(); syncMedia(true); updateUI(); }
+    else if (group) { multiSel.clear(); state.selected = clip.id; renderTimeline(); renderProps(); }
   };
   window.addEventListener("mousemove", mm); window.addEventListener("mouseup", mu);
 }
@@ -593,12 +639,20 @@ function initTimeline() {
     const clipEl = e.target.closest(".clip");
     if (clipEl) {
       const c = state.clips.find(x => x.id === clipEl.dataset.id); if (!c) return;
-      if (state.selected !== c.id) { state.selected = c.id; renderTimeline(); renderProps(); }
+      if (e.ctrlKey || e.metaKey) {   // Ctrl + clic : ajoute / retire ce clip de la sélection
+        e.preventDefault();
+        const cur = isMulti() ? new Set(multiSel) : new Set(state.selected ? [state.selected] : []);
+        if (cur.has(c.id)) cur.delete(c.id); else cur.add(c.id);
+        multiSel = cur; state.selected = cur.has(c.id) ? c.id : ([...cur].pop() || null);
+        renderTimeline(); renderProps(); updateUI(); return;
+      }
+      const keepMulti = isMulti() && multiSel.has(c.id);
+      if (!keepMulti) { multiSel.clear(); if (state.selected !== c.id) { state.selected = c.id; renderTimeline(); renderProps(); } }
       if (c.cap && (P.t < c.start || P.t >= c.start + c.duration)) seek(c.start + Math.min(0.05, c.duration / 2));
       startDrag(e, c, e.target.classList.contains("hl") ? "left" : e.target.classList.contains("hr") ? "right" : "move");
       return;
     }
-    if (e.target.closest(".lane") && state.selected) { state.selected = null; renderTimeline(); renderProps(); }
+    if (e.target.closest(".lane") && (state.selected || multiSel.size)) { multiSel.clear(); state.selected = null; renderTimeline(); renderProps(); }
   });
   tl.addEventListener("dragover", e => { const lane = e.target.closest(".lane"); if (lane) { e.preventDefault(); lane.classList.add("over"); } });
   tl.addEventListener("dragleave", e => { const lane = e.target.closest(".lane"); if (lane) lane.classList.remove("over"); });
@@ -629,6 +683,10 @@ function applyRatio() {
 }
 function renderProps() {
   const box = $("inspector"), c = getSel();
+  if (isMulti()) {
+    box.innerHTML = `<div class="insp-title">Sélection <small>${multiSel.size} clips</small></div><div class="insp-info">${multiSel.size} clips sélectionnés.<br>Glissez l'un d'eux pour tout déplacer ensemble, ou appuyez sur Suppr pour tout supprimer.</div><div class="insp-hint">Ctrl + clic : ajouter ou retirer un clip.<br>Clic dans le vide : tout désélectionner.</div>`;
+    return;
+  }
   if (!c) {
     const sz = SIZES["1080"][state.ratio];
     box.innerHTML = `<div class="insp-title">Projet</div><div class="insp-info">Format : <b>${state.ratio}</b><br>Qualité max : <b>${sz[0]}×${sz[1]}</b><br>Durée : <b>${fmt(total())}</b><br>Clips : <b>${state.clips.length}</b></div><div class="insp-hint">Cliquez sur un clip de la timeline pour afficher ses réglages ici : volume, taille, position, animation…<br><br>Le format se change sous l'aperçu (9:16, 16:9, 4:5, 1:1).</div>`;
@@ -1114,6 +1172,7 @@ setInterval(() => { if (editing) saveNow(false); }, 15000);          // enregist
 window.addEventListener("beforeunload", () => { if (editing && state.id) { try { window.ecom.projSaveSync(state.id, projMeta(), snapshot()); } catch (e) {} } });
 
 function resetEditorUI() {
+  updateMagnetBtn();
   $("zoom").value = state.pps; applyRatio(); showPanel(currentPanel); renderTimeline(); renderProps(); syncMedia(true); preloadAhead(P.t); updateUI();
 }
 function enterEditor() {
@@ -1282,7 +1341,7 @@ window.ecom.onExportProgress(s => {
 window.ecom.onCaptionProgress(s => { const el = $("capMsg"); if (el) el.textContent = s; });
 
 /* ---------- Mode IA : short vidéo automatique (9:16, 90 s max) ---------- */
-const AI_MAX_CHARS = 900, AI_MAX_VOICE = 90, AI_MAX_MEDIA = 4;
+const AI_MAX_CHARS = 1000, AI_MAX_VOICE = 90, AI_MAX_MEDIA = 4;
 const AI_STEPS = ["Voix off", "Musique", "Images / vidéos", "Sous-titres", "Création"];
 const AI_TRANS = ["fade", "pushL", "zoomIn", "slideR"];
 function aiReset() {
@@ -1337,7 +1396,7 @@ function aiStep1() {
     <div class="ai-row"><div><label>Langue parlée</label><br><select id="aiLang"><option value="fr"${ai.lang === "fr" ? " selected" : ""}>Français</option><option value="en"${ai.lang === "en" ? " selected" : ""}>English</option></select></div></div>
     <div class="ai-note">Les sous-titres d'une voix enregistrée utilisent la transcription en ligne (clé API de l'onglet Légendes du montage manuel).</div>`;
   }
-  return `<h3>Étape 1 — Votre voix off</h3><div class="sub">Écrivez un script (900 caractères maximum) et choisissez une voix, ou ajoutez votre propre voix off (1 min 30 maximum).</div>${seg}${body}`;
+  return `<h3>Étape 1 — Votre voix off</h3><div class="sub">Écrivez un script (1000 caractères maximum) et choisissez une voix, ou ajoutez votre propre voix off (1 min 30 maximum).</div>${seg}${body}`;
 }
 function aiStep2() {
   return `<h3>Étape 2 — Musique de fond</h3><div class="sub">Choisissez une musique enregistrée sur votre ordinateur, ou aucune musique.</div>
@@ -1439,7 +1498,26 @@ function aiNext() {
   if (ai.step < 5) {
     const bad = aiValid(ai.step); if (bad) { setStatus(bad); ai.err = bad; aiRender(); const m = $("aiBody"); m.insertAdjacentHTML("beforeend", `<div class="ai-note ai-warn">${esc(bad)}</div>`); return; }
     ai.err = ""; ai.step++; aiRender();
-  } else aiGenerate();
+  } else {
+    if (ai.busy) return;
+    askName(aiDefaultName()).then(nm => { if (nm === null) return; ai.outName = nm; aiGenerate(); });
+  }
+}
+const cleanName = v => String(v || "").replace(/\.mp4$/i, "").replace(/[<>:"\/\\|?*\x00-\x1f]/g, "").replace(/\s+/g, " ").trim().replace(/[. ]+$/, "").slice(0, 80);
+function aiDefaultName() { const d = new Date(); return `Short-IA-${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}-${pad2(d.getHours())}${pad2(d.getMinutes())}${pad2(d.getSeconds())}`; }
+// Fenêtre « Nommer votre vidéo » : nom proposé par défaut, à valider ou à modifier avant le montage automatique
+function askName(def) {
+  return new Promise(res => {
+    const m = $("renameModal"), inp = $("renameInput"); inp.value = def; m.classList.remove("hidden");
+    setTimeout(() => { inp.focus(); inp.select(); }, 30);
+    const done = v => { m.classList.add("hidden"); $("renameOk").onclick = $("renameNo").onclick = null; document.removeEventListener("keydown", kd, true); res(v); };
+    const kd = e => {
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); done(null); }
+      else if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); done(cleanName(inp.value) || def); }
+    };
+    document.addEventListener("keydown", kd, true);
+    $("renameOk").onclick = () => done(cleanName(inp.value) || def); $("renameNo").onclick = () => done(null);
+  });
 }
 // Découpe le script en phrases et répartit le temps (calé sur les silences de la voix)
 function scriptCaptions(text, T, sil) {
@@ -1496,6 +1574,7 @@ async function aiGenerate() {
     // 2) projet 9:16
     const st = freshState(); st.id = newProjId(); st.created = Date.now(); st.ratio = "9:16";
     const d0 = new Date(); st.name = L2("Short IA ", "AI Short ") + `${d0.getFullYear()}-${pad2(d0.getMonth() + 1)}-${pad2(d0.getDate())} ${pad2(d0.getHours())}:${pad2(d0.getMinutes())}`;
+    if (ai.outName) st.name = ai.outName;
     st.audioTracks = ai.music ? 2 : 1; st.capStyle = ai.capStyle; st.capPos = ai.capPos;
     const mkMedia = (o, type) => ({ id: newId(), path: o.path, name: o.name, type, duration: o.dur || o.duration || 5, hasAudio: type === "audio" ? true : !!o.hasAudio, width: o.width || 0, height: o.height || 0, thumb: o.thumb || "", proxy: "", proxyTried: true });
     const clipOf = (m, kind, track, start, dur, extra) => Object.assign({ id: newId(), mediaId: m.id, kind, track, type: kind === "audio" ? "audio" : m.type, path: m.path, name: m.name, start, inPoint: 0, duration: dur, mediaDur: m.type === "image" ? 0 : m.duration, scale: 100, x: 0, y: 0, volume: 100, hasAudio: kind === "audio" ? true : !!m.hasAudio, proxy: "", thumb: m.thumb || "", fit: "fit", fx: [], adj: {}, srcW: m.width || 0, srcH: m.height || 0 }, extra || {});
@@ -1527,7 +1606,7 @@ async function aiGenerate() {
     }
     // 4) montage + export
     aiProg(45, L2("Montage et export de la vidéo…", "Editing and exporting the video…"));
-    const out = await window.ecom.nextExportPath("Short-IA");
+    const out = await window.ecom.nextExportPath("Short-IA", ai.outName);
     ai.exporting = true;
     const r = await window.ecom.exportVideo(buildExportPayload(ai.quality, out));
     ai.exporting = false;
@@ -1589,6 +1668,12 @@ $("play").onclick = () => P.playing ? pause() : play();
 $("splitBtn").onclick = () => splitAt(P.t);
 $("deleteBtn").onclick = deleteSelected;
 $("addAudioTrack").onclick = addAudioTrack;
+$("magnetBtn").onclick = () => {
+  flushHistory(); state.magnet = state.magnet === false; updateMagnetBtn();
+  if (state.magnet !== false) { magnetMain(); renderTimeline(); syncMedia(true); updateUI(); }
+  setStatus(state.magnet !== false ? L2("Aimant activé : les clips de la piste V1 se collent à gauche", "Magnet on: V1 clips snap left") : L2("Aimant désactivé", "Magnet off"));
+  flushHistory();
+};
 $("zoom").oninput = e => { state.pps = +e.target.value; renderTimeline(); };
 $("scrub").onmousedown = e => {
   e.preventDefault(); const sc = $("scrub"), was = P.playing; if (was) pause();
@@ -1649,6 +1734,7 @@ window.addEventListener("keydown", e => {
   if (!typing) {
     if (mod && !e.altKey && keyIs(e, "z") && !e.shiftKey) { e.preventDefault(); undo(); return; }
     if (mod && !e.altKey && (keyIs(e, "y") || (keyIs(e, "z") && e.shiftKey))) { e.preventDefault(); redo(); return; }
+    if (mod && !e.altKey && !e.shiftKey && keyIs(e, "a")) { e.preventDefault(); selectAll(); return; }
     if (!mod && !e.altKey && keyIs(e, "k")) { e.preventDefault(); if (!e.repeat) splitAt(P.t); return; }
     if (e.key === "F5") { e.preventDefault(); refreshProject(); return; }
   }

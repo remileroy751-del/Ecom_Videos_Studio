@@ -1,5 +1,11 @@
-# EcomVideoStudio — v1.9.0
+# EcomVideoStudio — v1.10.0
 Logiciel desktop de montage vidéo pour Windows 10+ (Electron + FFmpeg).
+
+## Nouveautés v1.10.0 / What's new
+- **Aimant de la piste principale (V1)**, comme dans CapCut : quand on coupe une vidéo en deux et qu'on supprime la partie de gauche, la partie restante se colle automatiquement au début ; plus généralement, les photos et vidéos de V1 se collent à gauche sans laisser de trou (après suppression, déplacement, rognage ou ajout). **Activé par défaut** ; le bouton **🧲 Aimant** (juste après « ＋ Ajouter piste audio ») l'active ou le désactive, et ce réglage est enregistré avec le projet. Les textes, stickers et légendes ne sont jamais déplacés par l'aimant.
+- **Ctrl+A** sélectionne tous les clips du montage (toutes les pistes). **Ctrl + clic** ajoute ou retire un clip de la sélection (sélection multiple). Glisser l'un des clips sélectionnés déplace tout le groupe d'un seul bloc ; **Suppr** supprime toute la sélection ; **K** coupe tous les clips sélectionnés situés sous la tête de lecture ; Ctrl+Z annule. Clic dans le vide = tout désélectionner.
+- **Mode IA : script jusqu'à 1000 caractères** (au lieu de 900).
+- **Mode IA : « Nommer votre vidéo »** — à l'étape 5, après « Créer la vidéo », une fenêtre propose un nom par défaut (modifiable) : **Valider** (ou Entrée) lance le montage automatique, **Annuler** revient en arrière. La vidéo est enregistrée sous ce nom dans `Vidéos\EcomVideoStudio\Exports` (jamais d'écrasement : « nom (2).mp4 » si le nom existe déjà) et le projet porte le même nom.
 
 ## Nouveautés v1.9.0 / What's new
 - **Raccourcis clavier corrigés** (ils fonctionnent maintenant aussi sur un clavier **AZERTY**, quelle que soit la disposition) : **K** coupe le clip sélectionné à la tête de lecture, exactement comme le bouton « Couper » ; **Ctrl+Z** annule la dernière action (coupure, suppression, déplacement, effet…), plusieurs fois de suite — jusqu'à **100 actions** ; **Ctrl+Y** (ou Ctrl+Maj+Z) rétablit. Les raccourcis refonctionnent aussi juste après avoir modifié un réglage (cliquer ailleurs quitte le champ). **F5** = Actualiser.
@@ -11,7 +17,7 @@ Logiciel desktop de montage vidéo pour Windows 10+ (Electron + FFmpeg).
 ## Nouveautés v1.8.0 / What's new
 - **Raccourcis clavier** : **Ctrl+Z** annule jusqu'aux 10 dernières actions (Ctrl+Y ou Ctrl+Maj+Z pour rétablir) ; **K** coupe le clip sélectionné à la tête de lecture (vidéo, audio ou photo).
 - **Mode IA** (onglet sous Transitions, et bouton sur la page d'accueil) : crée un short vidéo 9:16 de 90 secondes maximum, étape par étape :
-  1. script de 900 caractères maximum lu par une voix off **féminine ou masculine** (voix Windows hors ligne, ou voix IA naturelles Gemini) — ou voix off enregistrée de 1 min 30 maximum ;
+  1. script de 1000 caractères maximum lu par une voix off **féminine ou masculine** (voix Windows hors ligne, ou voix IA naturelles Gemini) — ou voix off enregistrée de 1 min 30 maximum ;
   2. musique de fond choisie sur l'ordinateur (ou aucune), répétée si besoin ;
   3. 4 images ou 4 vidéos au maximum (la première est répétée si la durée est plus courte que la voix off) ;
   4. style (8 modèles) et position des sous-titres ;
@@ -76,7 +82,7 @@ Logiciel desktop de montage vidéo pour Windows 10+ (Electron + FFmpeg).
 Déposez tout le contenu à la racine du dépôt, puis poussez sur `main`. Le workflow `.github/workflows/build-windows.yml` compile l'installateur (publication GitHub d'electron-builder désactivée : `--publish never`) et le met dans l'artefact `EcomVideoStudio-Windows` et dans une Release.
 
 ## Raccourcis
-Espace : lecture/pause • Suppr : supprimer le clip sélectionné • K : couper • Ctrl+Z : annuler • Ctrl+Y : rétablir • ← → : déplacer la tête de lecture • F5 : actualiser.
+Espace : lecture/pause • Suppr : supprimer le clip sélectionné • K : couper • Ctrl+A : tout sélectionner • Ctrl+clic : sélection multiple • Ctrl+Z : annuler • Ctrl+Y : rétablir • ← → : déplacer la tête de lecture • F5 : actualiser.
 
 ## Développement local
 npm install
