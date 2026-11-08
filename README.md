@@ -1,6 +1,9 @@
 # EcomVideoStudio — v1.10.0
 Logiciel desktop de montage vidéo pour Windows 10+ (Electron + FFmpeg).
 
+## Compilation GitHub
+La compilation (workflow `.github/workflows/build-windows.yml`) réessaie automatiquement en cas d'erreur réseau temporaire (ex. erreur 504 au téléchargement d'Electron), utilise un cache des binaires Electron et un miroir de secours. Si elle échoue quand même, cliquez sur « Re-run failed jobs » dans l'onglet Actions.
+
 ## Nouveautés v1.10.0 / What's new
 - **Aimant de la piste principale (V1)**, comme dans CapCut : quand on coupe une vidéo en deux et qu'on supprime la partie de gauche, la partie restante se colle automatiquement au début ; plus généralement, les photos et vidéos de V1 se collent à gauche sans laisser de trou (après suppression, déplacement, rognage ou ajout). **Activé par défaut** ; le bouton **🧲 Aimant** (juste après « ＋ Ajouter piste audio ») l'active ou le désactive, et ce réglage est enregistré avec le projet. Les textes, stickers et légendes ne sont jamais déplacés par l'aimant.
 - **Ctrl+A** sélectionne tous les clips du montage (toutes les pistes). **Ctrl + clic** ajoute ou retire un clip de la sélection (sélection multiple). Glisser l'un des clips sélectionnés déplace tout le groupe d'un seul bloc ; **Suppr** supprime toute la sélection ; **K** coupe tous les clips sélectionnés situés sous la tête de lecture ; Ctrl+Z annule. Clic dans le vide = tout désélectionner.
